@@ -83,7 +83,7 @@ end
 Window = Library:CreateWindow({
     Title = 'Sakura Project',
     Theme = 'Dark',
-    Size = UDim2.fromOffset(1120, 760),
+    Size = UDim2.fromOffset(800, 540),
     Transparency = 0.1,
     Blurring = true,
     MinimizeKeybind = Enum.KeyCode.LeftAlt,
@@ -1643,34 +1643,58 @@ Window:AddToggle({
         end
     end,
 })
--- ===== FARM COIN V2: CONTINUOUS COIN LOOP =====
--- V2 intentionally does not trust the round counter to decide when to stop.
--- It keeps scanning the actual CoinContainer and immediately moves to the next
--- available coin after the current one disappears. A short timeout also prevents
--- one broken/stale coin from freezing the farm forever.
+-- ===== FARM COIN V2: FAST TELEPORT / NOCLIP COIN LOOP =====
+-- V2 is independent from the old farm state. It scans every descendant in the
+-- active CoinContainer, repeatedly touches all available coins, and teleports
+-- the local root directly onto the nearest target. This avoids TweenService
+-- being cancelled by character physics/network ownership.
 local FarmCoinV2Enabled = false
-local FarmCoinV2Speed = 58
+local FarmCoinV2Speed = 120
 local FarmCoinV2Connection = nil
-local FarmCoinV2Tween = nil
-local FarmCoinV2Active = false
-local FarmCoinV2Original = {}
 local FarmCoinV2Target = nil
-local FarmCoinV2StartedAt = 0
+local FarmCoinV2LastTarget = nil
+local FarmCoinV2LastMove = 0
+local FarmCoinV2Original = {}
 
-local function farmCoinV2SetPhysics(character, enabled)
+local function farmCoinV2GetContainer()
+    local direct = returncoincontainer()
+    if direct then return direct end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA('Folder') or obj:IsA('Model') then
+            if obj.Name == 'CoinContainer' then return obj end
+        end
+    end
+end
+
+local function farmCoinV2Coins(container)
+    local list = {}
+    if not container then return list end
+    for _, obj in ipairs(container:GetDescendants()) do
+        if obj:IsA('BasePart') and obj:GetAttribute('CoinID') == 'Coin' and obj.Parent then
+            -- A collected coin normally disappears or changes state. Do not
+            -- require Transparency/TouchInterest because those can be delayed.
+            table.insert(list, obj)
+        end
+    end
+    return list
+end
+
+local function farmCoinV2SetNoclip(character, enabled)
     for _, part in ipairs(character:GetDescendants()) do
         if part:IsA('BasePart') then
             if enabled then
                 if not FarmCoinV2Original[part] then
-                    FarmCoinV2Original[part] = {CanCollide = part.CanCollide, Massless = part.Massless}
+                    FarmCoinV2Original[part] = {CanCollide = part.CanCollide, CanTouch = part.CanTouch, Massless = part.Massless}
                 end
                 part.CanCollide = false
+                part.CanTouch = true
                 part.Massless = true
             else
                 local old = FarmCoinV2Original[part]
                 if old then
                     pcall(function()
                         part.CanCollide = old.CanCollide
+                        part.CanTouch = old.CanTouch
                         part.Massless = old.Massless
                     end)
                 end
@@ -1679,35 +1703,41 @@ local function farmCoinV2SetPhysics(character, enabled)
     end
 end
 
-local function stopFarmCoinV2()
-    FarmCoinV2Enabled = false
-    FarmCoinV2Active = false
-    FarmCoinV2Target = nil
-    FarmCoinV2StartedAt = 0
-    if FarmCoinV2Connection then
-        FarmCoinV2Connection:Disconnect()
-        FarmCoinV2Connection = nil
-    end
-    if FarmCoinV2Tween then
-        pcall(function() FarmCoinV2Tween:Cancel() end)
-        FarmCoinV2Tween = nil
-    end
-    local character = p.Character
-    if character then
-        farmCoinV2SetPhysics(character, false)
-        FarmCoinV2Original = {}
-        local hum = character:FindFirstChildOfClass('Humanoid')
-        if hum then pcall(function() hum.PlatformStand = false end) end
-        local root = character:FindFirstChild('HumanoidRootPart')
-        if root then
-            root.Velocity = Vector3.zero
-            root.RotVelocity = Vector3.zero
-        end
+local function farmCoinV2Touch(root, coin)
+    if not root or not coin or not coin.Parent then return end
+    pcall(function()
+        firetouchinterest(root, coin, 0)
+        firetouchinterest(root, coin, 1)
+    end)
+    -- Some versions of the game attach the touch receiver to the coin's
+    -- immediate parent. Try that too without requiring it to exist.
+    local parent = coin.Parent
+    if parent and parent:IsA('BasePart') then
+        pcall(function()
+            firetouchinterest(root, parent, 0)
+            firetouchinterest(root, parent, 1)
+        end)
     end
 end
 
-local function startFarmCoinV2()
-    stopFarmCoinV2()
+local function farmCoinV2Stop()
+    FarmCoinV2Enabled = false
+    FarmCoinV2Target = nil
+    FarmCoinV2LastTarget = nil
+    if FarmCoinV2Connection then FarmCoinV2Connection:Disconnect(); FarmCoinV2Connection=nil end
+    local character = p.Character
+    if character then
+        farmCoinV2SetNoclip(character, false)
+        local hum = character:FindFirstChildOfClass('Humanoid')
+        if hum then pcall(function() hum.PlatformStand=false end) end
+        local root = character:FindFirstChild('HumanoidRootPart')
+        if root then root.Velocity=Vector3.zero; root.RotVelocity=Vector3.zero end
+    end
+    FarmCoinV2Original = {}
+end
+
+local function farmCoinV2Start()
+    farmCoinV2Stop()
     local character = p.Character
     local root = character and character:FindFirstChild('HumanoidRootPart')
     if not root or p:GetAttribute('Alive') ~= true then return end
@@ -1716,54 +1746,48 @@ local function startFarmCoinV2()
         if not FarmCoinV2Enabled then return end
         character = p.Character
         root = character and character:FindFirstChild('HumanoidRootPart')
-        local hum = character and character:FindFirstChildOfClass('Humanoid')
         if not character or not root or p:GetAttribute('Alive') ~= true then return end
 
-        local container = returncoincontainer()
-        local coin, distance = FindNearestCoin(container)
+        farmCoinV2SetNoclip(character, true)
+        local hum = character:FindFirstChildOfClass('Humanoid')
+        if hum then pcall(function() hum.PlatformStand=true end) end
 
-        -- The server's bag/round counter can briefly say "full" before the
-        -- physical coin disappears. If a real coin exists, keep farming.
-        if coin and coin.Parent then
-            allCoinsCollected = false
-            farmCoinV2SetPhysics(character, true)
-            if hum then hum.PlatformStand = true end
-            FarmCoinV2Active = true
+        local container = farmCoinV2GetContainer()
+        local coins = farmCoinV2Coins(container)
+        if #coins == 0 then
+            FarmCoinV2Target=nil
+            return
+        end
 
-            if FarmCoinV2Target ~= coin or not FarmCoinV2Tween then
-                FarmCoinV2Target = coin
-                FarmCoinV2StartedAt = os.clock()
-                if FarmCoinV2Tween then pcall(function() FarmCoinV2Tween:Cancel() end) end
-                local target = coin.Position - Vector3.new(0, 2.5, 0)
-                local targetCF = CFrame.new(target) * CFrame.Angles(math.rad(90), 0, 0)
-                local duration = math.clamp(distance / math.max(FarmCoinV2Speed, 1), 0.04, 1.25)
-                FarmCoinV2Tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCF})
-                FarmCoinV2Tween:Play()
+        -- Burst-touch every currently available coin first. This catches coins
+        -- already near the player and makes collection much faster.
+        for _, coin in ipairs(coins) do
+            farmCoinV2Touch(root, coin)
+        end
+
+        local nearest, best = nil, math.huge
+        for _, coin in ipairs(coins) do
+            if coin.Parent then
+                local d=(root.Position-coin.Position).Magnitude
+                if d < best then nearest=coin; best=d end
             end
+        end
+        if not nearest then return end
 
-            -- Touch every frame while approaching/standing on the coin.
+        FarmCoinV2Target=nearest
+        local now=os.clock()
+        -- Direct CFrame movement is deliberate: TweenService can lose control
+        -- of the root when Humanoid/physics updates on the same frame.
+        local moveInterval = math.clamp(1 / math.max(FarmCoinV2Speed, 1), 0.004, 0.035)
+        if FarmCoinV2LastTarget ~= nearest or now-FarmCoinV2LastMove >= moveInterval then
+            FarmCoinV2LastTarget=nearest
+            FarmCoinV2LastMove=now
             pcall(function()
-                firetouchinterest(root, coin, 0)
-                firetouchinterest(root, coin, 1)
+                root.CFrame = CFrame.new(nearest.Position - Vector3.new(0, 2.35, 0)) * CFrame.Angles(math.rad(90),0,0)
+                root.Velocity=Vector3.zero
+                root.RotVelocity=Vector3.zero
             end)
-
-            -- If a stale coin refuses to disappear, abandon only that coin and
-            -- immediately scan for another one instead of stopping the farm.
-            if FarmCoinV2StartedAt > 0 and os.clock() - FarmCoinV2StartedAt > 2.5 then
-                if FarmCoinV2Tween then pcall(function() FarmCoinV2Tween:Cancel() end); FarmCoinV2Tween = nil end
-                FarmCoinV2Target = nil
-                FarmCoinV2StartedAt = 0
-            end
-        else
-            FarmCoinV2Active = false
-            FarmCoinV2Target = nil
-            FarmCoinV2StartedAt = 0
-            if FarmCoinV2Tween then
-                pcall(function() FarmCoinV2Tween:Cancel() end)
-                FarmCoinV2Tween = nil
-            end
-            if hum then pcall(function() hum.PlatformStand = false end) end
-            -- Keep V2 enabled and keep scanning; do not call stopFarmCoinV2().
+            farmCoinV2Touch(root, nearest)
         end
     end)
 end
@@ -1780,18 +1804,18 @@ Window:AddToggle({
                 isFarmingCoins = false
                 if farmingActive then stopFarming() end
             end
-            startFarmCoinV2()
+            farmCoinV2Start()
         else
-            stopFarmCoinV2()
+            farmCoinV2Stop()
         end
     end,
 })
 Window:AddSlider({
     Title = 'Farm Coin V2 Speed',
     Description = 'Travel speed for the faster coin farm',
-    Default = 58,
-    MinValue = 30,
-    MaxValue = 120,
+    Default = 120,
+    MinValue = 60,
+    MaxValue = 250,
     AllowDecimals = false,
     Tab = AutoFarmTab,
     Callback = function(value) FarmCoinV2Speed = value end,
@@ -4928,11 +4952,11 @@ local function skinRestoreSnapshot()
         end
     end
     for _, obj in ipairs(snap.accessories or {}) do
-        pcall(function() obj.Parent = character end)
+        pcall(function() local clone=obj:Clone(); clone.Parent=character end)
     end
     for _, key in ipairs({'Shirt','Pants','ShirtGraphic'}) do
         local obj=snap.clothes[key]
-        if obj then pcall(function() obj.Parent=character end) end
+        if obj then pcall(function() local clone=obj:Clone(); clone.Parent=character end) end
     end
     if snap.colors then
         local current=character:FindFirstChildOfClass('BodyColors')
@@ -5162,28 +5186,52 @@ local function skinBuildDescriptionFromAssetSet(ids)
     local desc = Instance.new('HumanoidDescription')
     local accessories = {}
     local shirtId, pantsId, tshirtId, faceId = 0, 0, 0, 0
+    local rigidMap = {
+        [8] = Enum.AccessoryType.Hat,
+        [41] = Enum.AccessoryType.Hair,
+        [42] = Enum.AccessoryType.Face,
+        [43] = Enum.AccessoryType.Neck,
+        [44] = Enum.AccessoryType.Shoulder,
+        [45] = Enum.AccessoryType.Front,
+        [46] = Enum.AccessoryType.Back,
+        [47] = Enum.AccessoryType.Waist,
+    }
+    local layeredMap = {
+        [64] = Enum.AccessoryType.TShirt,
+        [65] = Enum.AccessoryType.Jacket,
+        [66] = Enum.AccessoryType.Sweater,
+        [67] = Enum.AccessoryType.Shorts,
+        [68] = Enum.AccessoryType.LeftShoe,
+        [69] = Enum.AccessoryType.RightShoe,
+        [70] = Enum.AccessoryType.DressSkirt,
+    }
 
     for _, assetId in ipairs(ids) do
+        local id = tonumber(assetId)
         local infoOk, info = pcall(function()
-            return MarketplaceService:GetProductInfo(tonumber(assetId), Enum.InfoType.Asset)
+            return MarketplaceService:GetProductInfo(id, Enum.InfoType.Asset)
         end)
-        local assetTypeId = infoOk and info and info.AssetTypeId or nil
-        local accessoryType = skinAssetTypeToAccessoryType(assetTypeId)
-        if accessoryType then
+        local typeId = infoOk and info and tonumber(info.AssetTypeId) or nil
+        if rigidMap[typeId] then
+            -- IMPORTANT: rigid entries must NOT have Order. Roblox's
+            -- SetAccessories API uses the absence of Order to route the item
+            -- into Hat/Hair/Face/etc. instead of treating it as layered.
+            table.insert(accessories, {AssetId=id, AccessoryType=rigidMap[typeId]})
+        elseif layeredMap[typeId] then
             table.insert(accessories, {
-                AssetId = tonumber(assetId),
-                AccessoryType = accessoryType,
-                IsLayered = (tonumber(assetTypeId) or 0) >= 64,
-                Order = #accessories + 1,
+                AssetId=id,
+                AccessoryType=layeredMap[typeId],
+                IsLayered=true,
+                Order=#accessories+1,
             })
-        elseif tonumber(assetTypeId) == 11 then
-            shirtId = tonumber(assetId)
-        elseif tonumber(assetTypeId) == 12 then
-            pantsId = tonumber(assetId)
-        elseif tonumber(assetTypeId) == 2 then
-            tshirtId = tonumber(assetId)
-        elseif tonumber(assetTypeId) == 18 then
-            faceId = tonumber(assetId)
+        elseif typeId == 11 then
+            shirtId=id
+        elseif typeId == 12 then
+            pantsId=id
+        elseif typeId == 2 then
+            tshirtId=id
+        elseif typeId == 18 then
+            faceId=id
         end
     end
 
@@ -5197,6 +5245,47 @@ local function skinBuildDescriptionFromAssetSet(ids)
     return desc
 end
 
+local function skinDescriptionHasBody(desc)
+    for _, prop in ipairs({'Head','Torso','LeftArm','RightArm','LeftLeg','RightLeg'}) do
+        local ok, value = pcall(function() return desc[prop] end)
+        if ok and tonumber(value or 0) and tonumber(value) > 0 then return true end
+    end
+    return false
+end
+
+local function skinApplyItemsOnly(desc, character, humanoid)
+    local sourceModel = skinCreateDescriptionModel(desc, humanoid)
+    -- Do not hide the live body for ordinary catalog sets. These presets are
+    -- clothes/accessories; keeping the live rig avoids the invisible-body bug.
+    for _, source in ipairs(sourceModel:GetChildren()) do
+        if source:IsA('Accessory') then
+            local clone=source:Clone()
+            clone:SetAttribute('SakuraProjectLocalSkin',true)
+            clone.Parent=character
+            skinTrack(clone)
+            pcall(function() humanoid:AddAccessory(clone) end)
+        elseif source:IsA('Shirt') or source:IsA('Pants') or source:IsA('ShirtGraphic') then
+            local old=character:FindFirstChildOfClass(source.ClassName)
+            if old then pcall(function() old:Destroy() end) end
+            local clone=source:Clone()
+            clone:SetAttribute('SakuraProjectLocalSkin',true)
+            clone.Parent=character
+            skinTrack(clone)
+        end
+    end
+    local sourceHead=sourceModel:FindFirstChild('Head')
+    local targetHead=character:FindFirstChild('Head')
+    if sourceHead and targetHead then
+        local srcFace=sourceHead:FindFirstChild('face') or sourceHead:FindFirstChild('Face')
+        if srcFace and srcFace:IsA('Decal') then
+            local dst=targetHead:FindFirstChild('face') or targetHead:FindFirstChild('Face')
+            if dst and dst:IsA('Decal') then dst.Texture=srcFace.Texture
+            else local clone=srcFace:Clone(); clone.Name='face'; clone:SetAttribute('SakuraProjectLocalSkin',true); clone.Parent=targetHead; skinTrack(clone) end
+        end
+    end
+    pcall(function() sourceModel:Destroy() end)
+end
+
 local function skinApplyDescriptionSet(set)
     local character, humanoid = getSkinHumanoid()
     if not character or not humanoid then
@@ -5207,9 +5296,14 @@ local function skinApplyDescriptionSet(set)
     skinDestroyLocalObjects()
     SkinOldBodyParts = {}
     local desc = skinBuildDescriptionFromAssetSet(set.ids)
-    -- Build the finished avatar from the description. This is more reliable
-    -- for accessories/layered clothing than parenting raw catalog instances.
-    skinMakeVisualModel(desc, character, humanoid)
+    -- Catalog sets are normally clothes/accessories, so use the live body and
+    -- only replace the visual items. Full outfit IDs still use the full local
+    -- avatar renderer below.
+    if skinDescriptionHasBody(desc) then
+        skinMakeVisualModel(desc, character, humanoid)
+    else
+        skinApplyItemsOnly(desc, character, humanoid)
+    end
     SkinCurrentLabel = set.name
 end
 
@@ -5259,6 +5353,28 @@ for _, preset in ipairs(CostumeOutfits) do
         Callback = function() applyOutfitId(id, name) end,
     })
 end
+
+local selectedOutfitId = ''
+Window:AddInput({
+    Title = 'Custom Outfit / UserOutfit ID',
+    Description = 'Paste an Outfit ID; this uses Roblox HumanoidDescription locally.',
+    Placeholder = 'Example: 480059254',
+    Tab = SkinChangerTab,
+    Callback = function(value) selectedOutfitId = tostring(value or '') end,
+})
+Window:AddButton({
+    Title = 'Apply Custom Outfit',
+    Description = 'Render the selected Outfit ID locally',
+    Tab = SkinChangerTab,
+    Callback = function()
+        local id=tonumber(selectedOutfitId)
+        if not id then
+            Window:Notify({Title='Skin Changer', Description='Enter a numeric Outfit ID first.', Duration=3})
+            return
+        end
+        applyOutfitId(id, 'Custom Outfit #' .. tostring(id))
+    end,
+})
 
 Window:AddSection({Name = 'Skin Controls', Tab = SkinChangerTab})
 Window:AddButton({
@@ -6357,6 +6473,10 @@ danceList = {
     ['Dance 10 • Old School'] = '5938365243',
     ['Dance 11 • Twist'] = '182491037',
     ['Dance 12 • Shuffle'] = '4349242221',
+    ['Dance 13 • Robot'] = '333349950',
+    ['Dance 14 • Line Dance'] = '4049037604',
+    ['Dance 15 • Monkey'] = '3716636630',
+    ['Dance 16 • Hip Hop'] = '369533348',
 }
 
 local function playDance()
@@ -6435,12 +6555,12 @@ end)
 Window:AddToggleDropdown({
     Title = 'Auto Dance',
     Description = 'Automatically play selected dance (persists through respawns)',
-    Options = {
-        'Dance 1',
-        'Dance 2',
-        'Dance 3',
-        'Dance 4',
-    },
+    Options = (function()
+        local options = {}
+        for name in pairs(danceList) do table.insert(options, name) end
+        table.sort(options)
+        return options
+    end)(),
     Default = 'Dance 1 • Sakura',
     Enabled = false,
     Tab = MiscTab,
@@ -7267,10 +7387,10 @@ task.spawn(function()
 
     local window=findMainWindow()
     if not window then return end
-    window.Size=UDim2.fromOffset(920,620)
+    window.Size=UDim2.fromOffset(800,540)
 
     local constraint=window:FindFirstChild('SakuraProjectSizeConstraint') or Instance.new('UISizeConstraint')
-    constraint.Name='SakuraProjectSizeConstraint'; constraint.MinSize=Vector2.new(680,460); constraint.MaxSize=Vector2.new(1500,950); constraint.Parent=window
+    constraint.Name='SakuraProjectSizeConstraint'; constraint.MinSize=Vector2.new(600,420); constraint.MaxSize=Vector2.new(1250,820); constraint.Parent=window
 
     -- White function headings and readable descriptions.
     for _,obj in ipairs(window:GetDescendants()) do
@@ -7344,7 +7464,57 @@ task.spawn(function()
     -- Do not override the library's own window dragging/layout.
     -- Reparenting/clamping this frame can trap it inside the library container.
 
-    print('[Sakura Project] UI fixed: white headings, easy close, native launcher untouched, 920x620')
+    print('[Sakura Project] UI fixed: white headings, easy close, native launcher untouched, 800x540')
+end)
+
+-- ===== SAKURA PROJECT: DRAGGABLE NATIVE LAUNCHER =====
+-- Only changes the Position of the library's existing ImageButton. It never
+-- reparents, resizes, recolors, or overlays the launcher, avoiding the black
+-- circle artifacts caused by the old proxy approach.
+task.spawn(function()
+    task.wait(2)
+    local UIS=game:GetService('UserInputService')
+    local PlayersSvc=game:GetService('Players')
+    local CoreGuiSvc=game:GetService('CoreGui')
+    local pg=PlayersSvc.LocalPlayer:WaitForChild('PlayerGui')
+    local function findLauncher()
+        local candidates={}
+        for _,root in ipairs({pg,CoreGuiSvc}) do
+            pcall(function()
+                for _,obj in ipairs(root:GetDescendants()) do
+                    if obj:IsA('ImageButton') and obj.Visible and obj.AbsoluteSize.X>=28 and obj.AbsoluteSize.X<=110 and obj.AbsoluteSize.Y>=28 and obj.AbsoluteSize.Y<=110 and obj.AbsolutePosition.Y<260 then
+                        local image=tostring(obj.Image or '')
+                        if image~='' then table.insert(candidates,obj) end
+                    end
+                end
+            end)
+        end
+        table.sort(candidates,function(a,b) return a.AbsolutePosition.Y<b.AbsolutePosition.Y end)
+        return candidates[1]
+    end
+    local button=findLauncher()
+    if not button or button:GetAttribute('SakuraLauncherDragReady') then return end
+    button:SetAttribute('SakuraLauncherDragReady',true)
+    local dragging=false
+    local dragStart=nil
+    local startPos=nil
+    button.InputBegan:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+            dragging=true
+            dragStart=input.Position
+            startPos=button.Position
+            input.Changed:Connect(function()
+                if input.UserInputState==Enum.UserInputState.End then dragging=false end
+            end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch then
+            local delta=input.Position-dragStart
+            button.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+delta.X,startPos.Y.Scale,startPos.Y.Offset+delta.Y)
+        end
+    end)
 end)
 
 -- ===== SAKURA PROJECT: 10 LOCAL VISUAL FEATURES =====
@@ -7548,6 +7718,6 @@ end)
 task.wait(1)
 Window:Notify({
     Title = 'Sakura Project',
-    Description = 'Ready — local skins, new sets, Farm Coin V2 and UI fixes loaded.',
+    Description = 'Ready — compact UI, draggable launcher, fixed dances, skins and fast Farm Coin V2 loaded.',
     Duration = 5,
 })
