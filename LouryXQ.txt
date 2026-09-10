@@ -88,6 +88,145 @@ Window = Library:CreateWindow({
     Blurring = true,
     MinimizeKeybind = Enum.KeyCode.LeftAlt,
 })
+
+-- ===== ДОБАВЛЯЕМ ПЕРЕТАСКИВАНИЕ ДЛЯ КРУГЛОЙ КНОПКИ С ИКОНКОЙ НОЖА =====
+task.spawn(function()
+    task.wait(0.5) -- Ждем пока библиотека создаст UI
+    
+    local function makeLibraryButtonDraggable()
+        local UserInputService = game:GetService("UserInputService")
+        local player = game:GetService("Players").LocalPlayer
+        local playerGui = player:WaitForChild("PlayerGui")
+        
+        -- Ищем круглую кнопку библиотеки (обычно ImageButton с круглой формой)
+        local function findLibraryToggleButton()
+            -- Проверяем PlayerGui
+            for _, gui in pairs(playerGui:GetChildren()) do
+                if gui:IsA("ScreenGui") then
+                    for _, obj in pairs(gui:GetDescendants()) do
+                        -- Ищем ImageButton с иконкой или круглую кнопку
+                        if obj:IsA("ImageButton") or obj:IsA("TextButton") then
+                            -- Проверяем размер (круглые кнопки обычно квадратные и небольшие)
+                            local size = obj.AbsoluteSize
+                            if size.X > 40 and size.X < 100 and math.abs(size.X - size.Y) < 20 then
+                                -- Проверяем наличие UICorner (круглая форма)
+                                if obj:FindFirstChildOfClass("UICorner") then
+                                    return obj
+                                end
+                                -- Или просто круглая кнопка
+                                if obj.Name:lower():find("toggle") or 
+                                   obj.Name:lower():find("button") or
+                                   obj.Name:lower():find("minimize") then
+                                    return obj
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            
+            -- Проверяем CoreGui
+            local coreGui = game:GetService("CoreGui")
+            for _, gui in pairs(coreGui:GetChildren()) do
+                if gui:IsA("ScreenGui") then
+                    for _, obj in pairs(gui:GetDescendants()) do
+                        if obj:IsA("ImageButton") or obj:IsA("TextButton") then
+                            local size = obj.AbsoluteSize
+                            if size.X > 40 and size.X < 100 and math.abs(size.X - size.Y) < 20 then
+                                if obj:FindFirstChildOfClass("UICorner") then
+                                    return obj
+                                end
+                                if obj.Name:lower():find("toggle") or 
+                                   obj.Name:lower():find("button") or
+                                   obj.Name:lower():find("minimize") then
+                                    return obj
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            
+            return nil
+        end
+        
+        local toggleButton = findLibraryToggleButton()
+        
+        if not toggleButton then
+            print("[Sakura] Warning: Library toggle button not found")
+            return
+        end
+        
+        print("[Sakura] Found library toggle button: " .. toggleButton.Name)
+        
+        -- Переменные для перетаскивания
+        local dragging = false
+        local dragInput
+        local dragStart
+        local startPos
+        local clickStartTime = 0
+        local clickThreshold = 0.15 -- Время для различия клика и драга
+        
+        local function updatePosition(input)
+            local delta = input.Position - dragStart
+            toggleButton.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+        
+        -- Обработка начала ввода
+        toggleButton.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or 
+               input.UserInputType == Enum.UserInputType.Touch then
+                clickStartTime = tick()
+                dragging = true
+                dragStart = input.Position
+                startPos = toggleButton.Position
+                
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                        
+                        -- Проверяем был ли это клик или драг
+                        local clickDuration = tick() - clickStartTime
+                        if clickDuration < clickThreshold then
+                            -- Это был быстрый клик - не блокируем действие кнопки
+                            -- (библиотека обработает клик сама)
+                        end
+                    end
+                end)
+            end
+        end)
+        
+        -- Обработка изменения ввода
+        toggleButton.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or 
+               input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+        
+        -- Обновление позиции при движении
+        UserInputService.InputChanged:Connect(function(input)
+            if input == dragInput and dragging then
+                local clickDuration = tick() - clickStartTime
+                -- Начинаем перетаскивать только если прошло больше времени чем порог клика
+                if clickDuration > clickThreshold then
+                    updatePosition(input)
+                end
+            end
+        end)
+        
+        print("[Sakura] Library toggle button is now draggable! 🔪")
+    end
+    
+    makeLibraryButtonDraggable()
+end)
+-- ===== КОНЕЦ КОДА ПЕРЕТАСКИВАНИЯ КРУГЛОЙ КНОПКИ =====
+
 Themes = {
     Light = {
         Primary = Color3.fromRGB(232, 232, 232),
