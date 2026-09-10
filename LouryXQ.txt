@@ -2963,38 +2963,77 @@ Window:AddToggleDropdown({
 
 customSkyColorEnabled = false
 customSkyColor = Color3.fromRGB(135, 206, 235)
+originalLightingSettings = {}
+customSkyColorCorrection = nil
+
+-- Сохраняем оригинальные настройки освещения
+local function saveOriginalLightingSettings()
+    if next(originalLightingSettings) == nil then
+        local lighting = game:GetService('Lighting')
+        originalLightingSettings = {
+            Ambient = lighting.Ambient,
+            OutdoorAmbient = lighting.OutdoorAmbient,
+            ColorShift_Top = lighting.ColorShift_Top,
+            ColorShift_Bottom = lighting.ColorShift_Bottom,
+        }
+    end
+end
 
 local function applyCustomSkyColor()
     if not customSkyColorEnabled then
         return
     end
     
-    local lighting = game:GetService('Lighting')
-    local sky = lighting:FindFirstChildOfClass('Sky')
+    saveOriginalLightingSettings()
     
+    local lighting = game:GetService('Lighting')
+    
+    -- Удаляем старый ColorCorrectionEffect если существует
+    if customSkyColorCorrection then
+        customSkyColorCorrection:Destroy()
+        customSkyColorCorrection = nil
+    end
+    
+    -- Создаем ColorCorrectionEffect для изменения общего цвета освещения
+    customSkyColorCorrection = Instance.new('ColorCorrectionEffect')
+    customSkyColorCorrection.Name = 'CustomSkyColorCorrection'
+    customSkyColorCorrection.TintColor = customSkyColor
+    customSkyColorCorrection.Brightness = 0
+    customSkyColorCorrection.Contrast = 0
+    customSkyColorCorrection.Saturation = 0.2
+    customSkyColorCorrection.Parent = lighting
+    
+    -- Применяем цвет к освещению
+    local brightenedColor = Color3.new(
+        math.min(1, customSkyColor.R * 1.5),
+        math.min(1, customSkyColor.G * 1.5),
+        math.min(1, customSkyColor.B * 1.5)
+    )
+    
+    lighting.Ambient = Color3.new(
+        customSkyColor.R * 0.7,
+        customSkyColor.G * 0.7,
+        customSkyColor.B * 0.7
+    )
+    lighting.OutdoorAmbient = brightenedColor
+    lighting.ColorShift_Top = customSkyColor
+    lighting.ColorShift_Bottom = Color3.new(
+        customSkyColor.R * 0.5,
+        customSkyColor.G * 0.5,
+        customSkyColor.B * 0.5
+    )
+    
+    -- Работаем с Sky объектом
+    local sky = lighting:FindFirstChildOfClass('Sky')
     if not sky then
         sky = Instance.new('Sky')
         sky.Parent = lighting
     end
     
-    -- Создаем однотонный скайбокс выбранного цвета
-    local tempPart = Instance.new('Part')
-    tempPart.Size = Vector3.new(1, 1, 1)
-    tempPart.Color = customSkyColor
-    tempPart.Material = Enum.Material.SmoothPlastic
-    
-    sky.SkyboxBk = 'rbxasset://sky/null'
-    sky.SkyboxDn = 'rbxasset://sky/null'
-    sky.SkyboxFt = 'rbxasset://sky/null'
-    sky.SkyboxLf = 'rbxasset://sky/null'
-    sky.SkyboxRt = 'rbxasset://sky/null'
-    sky.SkyboxUp = 'rbxasset://sky/null'
-    
-    -- Применяем цвет к освещению для создания атмосферы
-    lighting.Ambient = customSkyColor
-    lighting.OutdoorAmbient = customSkyColor
-    
-    tempPart:Destroy()
+    -- Устанавливаем звезды для эффекта
+    sky.StarCount = 3000
+    sky.SunAngularSize = 21
+    sky.MoonAngularSize = 11
 end
 
 Window:AddToggle({
@@ -3015,14 +3054,28 @@ Window:AddToggle({
         else
             local lighting = game:GetService('Lighting')
             
-            -- Восстанавливаем оригинальные значения
-            lighting.Ambient = Color3.fromRGB(128, 128, 128)
-            lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+            -- Удаляем ColorCorrectionEffect
+            if customSkyColorCorrection then
+                customSkyColorCorrection:Destroy()
+                customSkyColorCorrection = nil
+            end
             
-            local sky = lighting:FindFirstChildOfClass('Sky')
-            if sky and not skyEnabled then
-                sky:Destroy()
-            elseif skyEnabled then
+            -- Восстанавливаем оригинальные значения освещения
+            if next(originalLightingSettings) ~= nil then
+                lighting.Ambient = originalLightingSettings.Ambient
+                lighting.OutdoorAmbient = originalLightingSettings.OutdoorAmbient
+                lighting.ColorShift_Top = originalLightingSettings.ColorShift_Top
+                lighting.ColorShift_Bottom = originalLightingSettings.ColorShift_Bottom
+            else
+                -- Устанавливаем стандартные значения
+                lighting.Ambient = Color3.fromRGB(138, 138, 138)
+                lighting.OutdoorAmbient = Color3.fromRGB(138, 138, 138)
+                lighting.ColorShift_Top = Color3.fromRGB(0, 0, 0)
+                lighting.ColorShift_Bottom = Color3.fromRGB(0, 0, 0)
+            end
+            
+            -- Если другой скайбокс активен, применяем его заново
+            if skyEnabled then
                 applySky()
             end
             
@@ -6495,7 +6548,104 @@ UserInputService.InputBegan:Connect(function(g)
 end)
 
 
--- Создание перемещаемой кнопки для открытия меню
+-- ===== СИСТЕМА ПЕРЕТАСКИВАНИЯ ГЛАВНОГО МЕНЮ =====
+-- Добавляем функционал перетаскивания для главного окна библиотеки
+task.spawn(function()
+    task.wait(1) -- Ждем загрузки UI
+    
+    local function makeWindowDraggable(windowFrame)
+        if not windowFrame then return end
+        
+        local UserInputService = game:GetService("UserInputService")
+        local dragging = false
+        local dragInput
+        local dragStart
+        local startPos
+        
+        local function update(input)
+            local delta = input.Position - dragStart
+            windowFrame.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+        
+        windowFrame.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or 
+               input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = windowFrame.Position
+                
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+        
+        windowFrame.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or 
+               input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+        
+        UserInputService.InputChanged:Connect(function(input)
+            if input == dragInput and dragging then
+                update(input)
+            end
+        end)
+    end
+    
+    -- Ищем главное окно в PlayerGui или CoreGui
+    local function findMainWindow()
+        local player = game:GetService("Players").LocalPlayer
+        local playerGui = player:WaitForChild("PlayerGui")
+        
+        -- Пробуем найти окно в PlayerGui
+        for _, gui in pairs(playerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                for _, frame in pairs(gui:GetDescendants()) do
+                    if frame:IsA("Frame") and frame.Name:find("Window") or 
+                       frame:IsA("Frame") and frame.Name:find("Main") or
+                       frame:IsA("Frame") and frame.Size.X.Offset > 500 then
+                        return frame
+                    end
+                end
+            end
+        end
+        
+        -- Пробуем в CoreGui
+        local coreGui = game:GetService("CoreGui")
+        for _, gui in pairs(coreGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Name ~= "SakuraMenuButton" then
+                for _, frame in pairs(gui:GetDescendants()) do
+                    if frame:IsA("Frame") and (frame.Name:find("Window") or 
+                       frame.Name:find("Main") or frame.Size.X.Offset > 500) then
+                        return frame
+                    end
+                end
+            end
+        end
+        
+        return nil
+    end
+    
+    local mainWindow = findMainWindow()
+    if mainWindow then
+        makeWindowDraggable(mainWindow)
+        print("[Sakura] Main window is now draggable!")
+    else
+        print("[Sakura] Warning: Main window not found for dragging")
+    end
+end)
+
+
+-- ===== КНОПКА ОТКРЫТИЯ/ЗАКРЫТИЯ МЕНЮ =====
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "SakuraMenuButton"
 ScreenGui.ResetOnSpawn = false
@@ -6524,7 +6674,6 @@ UIStroke.Color = Color3.fromRGB(255, 105, 180)
 UIStroke.Thickness = 2
 UIStroke.Parent = MenuButton
 
--- Добавление эффекта свечения
 local UIGradient = Instance.new("UIGradient")
 UIGradient.Color = ColorSequence.new{
     ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 192, 203)),
@@ -6536,72 +6685,149 @@ UIGradient.Parent = MenuButton
 
 ScreenGui.Parent = game:GetService("CoreGui")
 
--- Функционал перемещения кнопки
-local dragging = false
-local dragInput
-local dragStart
-local startPos
+-- Функционал перемещения кнопки меню
+local buttonDragging = false
+local buttonDragInput
+local buttonDragStart
+local buttonStartPos
 
-local function update(input)
-    local delta = input.Position - dragStart
+local function updateButtonPosition(input)
+    local delta = input.Position - buttonDragStart
     MenuButton.Position = UDim2.new(
-        startPos.X.Scale,
-        startPos.X.Offset + delta.X,
-        startPos.Y.Scale,
-        startPos.Y.Offset + delta.Y
+        buttonStartPos.X.Scale,
+        buttonStartPos.X.Offset + delta.X,
+        buttonStartPos.Y.Scale,
+        buttonStartPos.Y.Offset + delta.Y
     )
 end
 
 MenuButton.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = MenuButton.Position
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or 
+       input.UserInputType == Enum.UserInputType.Touch then
+        buttonDragging = true
+        buttonDragStart = input.Position
+        buttonStartPos = MenuButton.Position
         
         input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
+                buttonDragging = false
             end
         end)
     end
 end)
 
 MenuButton.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        dragInput = input
+    if input.UserInputType == Enum.UserInputType.MouseMovement or 
+       input.UserInputType == Enum.UserInputType.Touch then
+        buttonDragInput = input
     end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        update(input)
+    if input == buttonDragInput and buttonDragging then
+        updateButtonPosition(input)
     end
 end)
 
--- Клик для открытия/закрытия меню
-local menuOpen = true
-MenuButton.MouseButton1Click:Connect(function()
-    if Window and Window.Toggle then
-        Window:Toggle()
-        menuOpen = not menuOpen
-        
-        if menuOpen then
-            MenuButton.Text = "🌸 Menu"
-            MenuButton.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
-        else
-            MenuButton.Text = "✕ Close"
-            MenuButton.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
-        end
+-- Логика открытия/закрытия меню
+local menuVisible = true
+local clickStartTime = 0
+local clickThreshold = 0.2 -- Время в секундах для различия между кликом и перетаскиванием
+
+MenuButton.MouseButton1Down:Connect(function()
+    clickStartTime = tick()
+end)
+
+MenuButton.MouseButton1Up:Connect(function()
+    local clickDuration = tick() - clickStartTime
+    
+    -- Если это был быстрый клик (не перетаскивание)
+    if clickDuration < clickThreshold and not buttonDragging then
+        task.spawn(function()
+            -- Ищем главное окно
+            local function findAndToggleWindow()
+                local player = game:GetService("Players").LocalPlayer
+                local playerGui = player:WaitForChild("PlayerGui")
+                
+                -- Пробуем найти в PlayerGui
+                for _, gui in pairs(playerGui:GetChildren()) do
+                    if gui:IsA("ScreenGui") then
+                        for _, frame in pairs(gui:GetDescendants()) do
+                            if frame:IsA("Frame") and (frame.Name:find("Window") or 
+                               frame.Name:find("Main") or frame.Size.X.Offset > 500) then
+                                frame.Visible = not frame.Visible
+                                menuVisible = frame.Visible
+                                
+                                -- Обновляем текст кнопки
+                                if menuVisible then
+                                    MenuButton.Text = "🌸 Menu"
+                                    MenuButton.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
+                                else
+                                    MenuButton.Text = "✕ Close"
+                                    MenuButton.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+                                end
+                                return true
+                            end
+                        end
+                    end
+                end
+                
+                -- Пробуем в CoreGui
+                local coreGui = game:GetService("CoreGui")
+                for _, gui in pairs(coreGui:GetChildren()) do
+                    if gui:IsA("ScreenGui") and gui.Name ~= "SakuraMenuButton" then
+                        for _, frame in pairs(gui:GetDescendants()) do
+                            if frame:IsA("Frame") and (frame.Name:find("Window") or 
+                               frame.Name:find("Main") or frame.Size.X.Offset > 500) then
+                                frame.Visible = not frame.Visible
+                                menuVisible = frame.Visible
+                                
+                                -- Обновляем текст кнопки
+                                if menuVisible then
+                                    MenuButton.Text = "🌸 Menu"
+                                    MenuButton.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
+                                else
+                                    MenuButton.Text = "✕ Close"
+                                    MenuButton.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+                                end
+                                return true
+                            end
+                        end
+                    end
+                end
+                
+                return false
+            end
+            
+            if not findAndToggleWindow() then
+                -- Fallback: используем Window.Toggle если доступен
+                if Window and Window.Toggle then
+                    Window:Toggle()
+                    menuVisible = not menuVisible
+                    
+                    if menuVisible then
+                        MenuButton.Text = "🌸 Menu"
+                        MenuButton.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
+                    else
+                        MenuButton.Text = "✕ Close"
+                        MenuButton.Text = "✕ Close"
+                        MenuButton.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+                    end
+                end
+            end
+        end)
     end
 end)
 
 -- Анимация при наведении
 MenuButton.MouseEnter:Connect(function()
-    game:GetService("TweenService"):Create(
-        MenuButton,
-        TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {BackgroundTransparency = 0.1, Size = UDim2.new(0, 130, 0, 45)}
-    ):Play()
+    if not buttonDragging then
+        game:GetService("TweenService"):Create(
+            MenuButton,
+            TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            {BackgroundTransparency = 0.1, Size = UDim2.new(0, 130, 0, 45)}
+        ):Play()
+    end
 end)
 
 MenuButton.MouseLeave:Connect(function()
@@ -6613,8 +6839,9 @@ MenuButton.MouseLeave:Connect(function()
 end)
 
 -- Уведомление об успешной загрузке
+task.wait(1)
 Window:Notify({
-    Title = 'Sakura Project',
-    Description = 'Script loaded successfully! Drag the menu button to move it.',
+    Title = 'Sakura Project ✅',
+    Description = 'Script loaded! Main window & button are draggable.',
     Duration = 5,
 })
