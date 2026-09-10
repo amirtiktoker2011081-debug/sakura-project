@@ -6690,12 +6690,20 @@ end)
 -- ===== СИСТЕМА ПЕРЕТАСКИВАНИЯ ГЛАВНОГО МЕНЮ =====
 -- Добавляем функционал перетаскивания для главного окна библиотеки
 task.spawn(function()
-    task.wait(1) -- Ждем загрузки UI
+    task.wait(1.5) -- Увеличиваем задержку для загрузки UI
+    
+    local UserInputService = game:GetService("UserInputService")
     
     local function makeWindowDraggable(windowFrame)
-        if not windowFrame then return end
+        if not windowFrame then 
+            print("[Sakura] ERROR: windowFrame is nil")
+            return 
+        end
         
-        local UserInputService = game:GetService("UserInputService")
+        print("[Sakura] Making window draggable: " .. windowFrame.Name)
+        print("[Sakura] Window size: " .. tostring(windowFrame.Size))
+        print("[Sakura] Window position: " .. tostring(windowFrame.Position))
+        
         local dragging = false
         local dragInput
         local dragStart
@@ -6717,10 +6725,12 @@ task.spawn(function()
                 dragging = true
                 dragStart = input.Position
                 startPos = windowFrame.Position
+                print("[Sakura] Started dragging main window")
                 
                 input.Changed:Connect(function()
                     if input.UserInputState == Enum.UserInputState.End then
                         dragging = false
+                        print("[Sakura] Stopped dragging main window")
                     end
                 end)
             end
@@ -6738,48 +6748,113 @@ task.spawn(function()
                 update(input)
             end
         end)
+        
+        print("[Sakura] ✅ Main window is now draggable!")
     end
     
-    -- Ищем главное окно в PlayerGui или CoreGui
+    -- Улучшенный поиск главного окна
     local function findMainWindow()
+        print("[Sakura] Searching for main window...")
+        
         local player = game:GetService("Players").LocalPlayer
         local playerGui = player:WaitForChild("PlayerGui")
+        local coreGui = game:GetService("CoreGui")
         
-        -- Пробуем найти окно в PlayerGui
+        local candidates = {}
+        
+        -- Ищем во всех GUI
+        local function searchInGui(gui, location)
+            for _, obj in pairs(gui:GetDescendants()) do
+                if obj:IsA("Frame") then
+                    local size = obj.AbsoluteSize
+                    -- Ищем большие фреймы (главное окно обычно большое)
+                    if size.X > 400 and size.Y > 300 then
+                        table.insert(candidates, {
+                            frame = obj,
+                            location = location,
+                            size = size,
+                            name = obj.Name,
+                            score = 0
+                        })
+                    end
+                end
+            end
+        end
+        
+        -- Поиск в PlayerGui
         for _, gui in pairs(playerGui:GetChildren()) do
             if gui:IsA("ScreenGui") then
-                for _, frame in pairs(gui:GetDescendants()) do
-                    if frame:IsA("Frame") and frame.Name:find("Window") or 
-                       frame:IsA("Frame") and frame.Name:find("Main") or
-                       frame:IsA("Frame") and frame.Size.X.Offset > 500 then
-                        return frame
-                    end
-                end
+                searchInGui(gui, "PlayerGui")
             end
         end
         
-        -- Пробуем в CoreGui
-        local coreGui = game:GetService("CoreGui")
+        -- Поиск в CoreGui (кроме нашей кнопки)
         for _, gui in pairs(coreGui:GetChildren()) do
             if gui:IsA("ScreenGui") and gui.Name ~= "SakuraMenuButton" then
-                for _, frame in pairs(gui:GetDescendants()) do
-                    if frame:IsA("Frame") and (frame.Name:find("Window") or 
-                       frame.Name:find("Main") or frame.Size.X.Offset > 500) then
-                        return frame
-                    end
-                end
+                searchInGui(gui, "CoreGui")
             end
         end
         
+        print("[Sakura] Found " .. #candidates .. " candidate windows")
+        
+        -- Оцениваем кандидатов
+        for _, candidate in pairs(candidates) do
+            local frame = candidate.frame
+            local score = 0
+            
+            -- Бонус за размер близкий к 700x500 (наш размер окна)
+            local sizeDiffX = math.abs(frame.AbsoluteSize.X - 700)
+            local sizeDiffY = math.abs(frame.AbsoluteSize.Y - 500)
+            if sizeDiffX < 100 and sizeDiffY < 100 then
+                score = score + 10
+            end
+            
+            -- Бонус за название
+            local nameLower = frame.Name:lower()
+            if nameLower:find("window") then score = score + 5 end
+            if nameLower:find("main") then score = score + 5 end
+            if nameLower:find("container") then score = score + 3 end
+            if nameLower:find("frame") then score = score + 2 end
+            
+            -- Бонус за видимость
+            if frame.Visible then score = score + 3 end
+            
+            -- Бонус за наличие дочерних элементов (вкладок, кнопок)
+            local childCount = #frame:GetChildren()
+            if childCount > 5 then score = score + 5 end
+            if childCount > 10 then score = score + 3 end
+            
+            candidate.score = score
+            
+            print(string.format("[Sakura] Candidate: %s (Size: %dx%d, Score: %d, Location: %s)", 
+                frame.Name, 
+                math.floor(frame.AbsoluteSize.X), 
+                math.floor(frame.AbsoluteSize.Y),
+                score,
+                candidate.location
+            ))
+        end
+        
+        -- Сортируем по баллам
+        table.sort(candidates, function(a, b) return a.score > b.score end)
+        
+        -- Возвращаем лучший кандидат
+        if #candidates > 0 then
+            local best = candidates[1]
+            print("[Sakura] Selected window: " .. best.name .. " (Score: " .. best.score .. ")")
+            return best.frame
+        end
+        
+        print("[Sakura] ❌ No suitable window found")
         return nil
     end
     
     local mainWindow = findMainWindow()
     if mainWindow then
         makeWindowDraggable(mainWindow)
-        print("[Sakura] Main window is now draggable!")
     else
-        print("[Sakura] Warning: Main window not found for dragging")
+        warn("[Sakura] WARNING: Main window not found for dragging!")
+        warn("[Sakura] Please check console (F9) for debug info")
     end
 end)
 
