@@ -4788,9 +4788,10 @@ MiscTab = Window:AddTab({
     Icon = 'rbxassetid://11963373994',
 })
 
--- ===== SAKURA PROJECT: SKIN CHANGER =====
--- Full outfit presets are loaded from Roblox outfit/bundle descriptions.
--- Item-based presets are assembled into a HumanoidDescription where possible.
+-- ===== SAKURA PROJECT: SKIN CHANGER (LOCAL VISUAL ENGINE) =====
+-- Roblox blocks Humanoid:ApplyDescriptionAsync from normal client execution.
+-- This version gets the HumanoidDescription, then reproduces its appearance locally
+-- by editing the character's existing body parts and adding the listed accessories/clothes.
 SkinChangerTab = Window:AddTab({
     Title = 'Skin Changer',
     Icon = 'rbxassetid://11963373994',
@@ -4798,10 +4799,10 @@ SkinChangerTab = Window:AddTab({
 
 Window:AddSection({Name = 'Full Outfit Presets', Tab = SkinChangerTab})
 
-local SkinChangerApplied = false
-local SavedHumanoidDescription = nil
-local SavedDescriptionValid = false
 local SkinApplyBusy = false
+local SkinOriginalSnapshot = nil
+local SkinLocalObjects = {}
+local SkinCurrentLabel = nil
 
 local function getSkinHumanoid()
     local character = p and p.Character
@@ -4810,20 +4811,350 @@ local function getSkinHumanoid()
     return nil, nil
 end
 
-local function restoreOriginalAvatar()
-    local character, humanoid = getSkinHumanoid()
-    if not humanoid then return false, 'Character/Humanoid not found' end
-    if SavedDescriptionValid and SavedHumanoidDescription then
-        local ok, err = pcall(function()
-            humanoid:ApplyDescriptionAsync(SavedHumanoidDescription)
-        end)
-        if ok then
-            SkinChangerApplied = false
-            return true
-        end
-        return false, tostring(err)
+local function skinTrack(obj)
+    if obj then
+        table.insert(SkinLocalObjects, obj)
     end
-    return false, 'Original avatar description is not available yet'
+    return obj
+end
+
+local function skinDestroyLocalObjects()
+    for i = #SkinLocalObjects, 1, -1 do
+        local obj = SkinLocalObjects[i]
+        pcall(function()
+            if obj and obj.Parent then obj:Destroy() end
+        end)
+        SkinLocalObjects[i] = nil
+    end
+    -- Also clean anything left behind by an older version.
+    local character = p and p.Character
+    if character then
+        for _, obj in ipairs(character:GetDescendants()) do
+            if obj:GetAttribute('SakuraProjectLocalSkin') then
+                pcall(function() obj:Destroy() end)
+            end
+        end
+    end
+end
+
+local function skinSnapshotCharacter(character)
+    if SkinOriginalSnapshot and SkinOriginalSnapshot.character == character then return end
+    local snap = {character = character, parts = {}, clothing = {}, colors = {}, faceTexture = nil}
+
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA('MeshPart') then
+            snap.parts[obj] = {
+                MeshId = obj.MeshId,
+                TextureID = obj.TextureID,
+                Transparency = obj.Transparency,
+                Color = obj.Color,
+            }
+        elseif obj:IsA('BasePart') then
+            snap.parts[obj] = {
+                Transparency = obj.Transparency,
+                Color = obj.Color,
+            }
+        elseif obj:IsA('Shirt') then
+            snap.clothing.Shirt = obj.ShirtTemplate
+        elseif obj:IsA('Pants') then
+            snap.clothing.Pants = obj.PantsTemplate
+        elseif obj:IsA('ShirtGraphic') then
+            snap.clothing.ShirtGraphic = obj.Graphic
+        elseif obj:IsA('BodyColors') then
+            snap.colors = {
+                HeadColor3 = obj.HeadColor3, LeftArmColor3 = obj.LeftArmColor3,
+                RightArmColor3 = obj.RightArmColor3, LeftLegColor3 = obj.LeftLegColor3,
+                RightLegColor3 = obj.RightLegColor3, TorsoColor3 = obj.TorsoColor3,
+            }
+        elseif obj:IsA('Decal') and (obj.Name == 'face' or obj.Name == 'Face') then
+            snap.faceTexture = obj.Texture
+        end
+    end
+    SkinOriginalSnapshot = snap
+end
+
+local function skinRestoreSnapshot()
+    local character = p and p.Character
+    local snap = SkinOriginalSnapshot
+    if not character or not snap or snap.character ~= character then
+        return false
+    end
+
+    skinDestroyLocalObjects()
+
+    for obj, data in pairs(snap.parts) do
+        if obj and obj.Parent then
+            pcall(function()
+                if obj:IsA('MeshPart') then
+                    obj.MeshId = data.MeshId
+                    obj.TextureID = data.TextureID
+                end
+                if data.Transparency ~= nil then obj.Transparency = data.Transparency end
+                if data.Color then obj.Color = data.Color end
+            end)
+        end
+    end
+
+    local shirt = character:FindFirstChildOfClass('Shirt')
+    if snap.clothing.Shirt then
+        if not shirt then shirt = skinTrack(Instance.new('Shirt')) shirt.Parent = character end
+        shirt.ShirtTemplate = snap.clothing.Shirt
+    end
+    local pants = character:FindFirstChildOfClass('Pants')
+    if snap.clothing.Pants then
+        if not pants then pants = skinTrack(Instance.new('Pants')) pants.Parent = character end
+        pants.PantsTemplate = snap.clothing.Pants
+    end
+    local graphic = character:FindFirstChildOfClass('ShirtGraphic')
+    if snap.clothing.ShirtGraphic then
+        if not graphic then graphic = skinTrack(Instance.new('ShirtGraphic')) graphic.Parent = character end
+        graphic.Graphic = snap.clothing.ShirtGraphic
+    end
+
+    local colors = character:FindFirstChildOfClass('BodyColors')
+    if colors and next(snap.colors) then
+        for k, v in pairs(snap.colors) do pcall(function() colors[k] = v end) end
+    end
+    if snap.faceTexture then
+        local head = character:FindFirstChild('Head')
+        local face = head and (head:FindFirstChild('face') or head:FindFirstChild('Face'))
+        if face and face:IsA('Decal') then face.Texture = snap.faceTexture end
+    end
+    return true
+end
+
+local function skinLoadObjects(assetId)
+    local ok, objects = pcall(function()
+        return game:GetObjects('rbxassetid://' .. tostring(assetId))
+    end)
+    if not ok or type(objects) ~= 'table' then return {} end
+    return objects
+end
+
+local function skinFindMeshSource(root)
+    if root:IsA('MeshPart') then return root end
+    if root:IsA('SpecialMesh') then return root end
+    for _, obj in ipairs(root:GetDescendants()) do
+        if obj:IsA('MeshPart') or obj:IsA('SpecialMesh') then return obj end
+    end
+    return nil
+end
+
+local function skinSetPartMesh(part, source)
+    if not part or not source then return false end
+    if part:IsA('MeshPart') and source:IsA('MeshPart') then
+        pcall(function() part.MeshId = source.MeshId end)
+        pcall(function() part.TextureID = source.TextureID end)
+        return true
+    end
+    if part:IsA('BasePart') and source:IsA('SpecialMesh') then
+        local sm = part:FindFirstChild('SakuraProjectLocalMesh')
+        if not sm then
+            sm = Instance.new('SpecialMesh')
+            sm.Name = 'SakuraProjectLocalMesh'
+            sm:SetAttribute('SakuraProjectLocalSkin', true)
+            sm.Parent = part
+            skinTrack(sm)
+        end
+        pcall(function() sm.MeshType = source.MeshType end)
+        pcall(function() sm.MeshId = source.MeshId end)
+        pcall(function() sm.TextureId = source.TextureId end)
+        pcall(function() sm.Scale = source.Scale end)
+        return true
+    end
+    return false
+end
+
+local function skinApplyBodyAsset(assetId, names)
+    if not tonumber(assetId) or tonumber(assetId) == 0 then return end
+    local objects = skinLoadObjects(assetId)
+    local targets = {}
+    for _, name in ipairs(names) do
+        local part = p.Character and p.Character:FindFirstChild(name)
+        if part then table.insert(targets, part) end
+    end
+
+    for _, root in ipairs(objects) do
+        local sources = {}
+        if root:IsA('MeshPart') or root:IsA('SpecialMesh') then
+            table.insert(sources, root)
+        else
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA('MeshPart') or obj:IsA('SpecialMesh') then
+                    table.insert(sources, obj)
+                end
+            end
+        end
+
+        local used = {}
+        -- Prefer matching body-part names (R15 body packages contain several meshes).
+        for _, source in ipairs(sources) do
+            local sourceName = tostring(source.Name)
+            local target = p.Character and p.Character:FindFirstChild(sourceName)
+            if target and not used[target] then
+                if skinSetPartMesh(target, source) then used[target] = true end
+            end
+        end
+        -- If the asset exposes one unnamed mesh, apply it to the requested target.
+        if #sources == 1 then
+            for _, target in ipairs(targets) do
+                if not used[target] and skinSetPartMesh(target, sources[1]) then
+                    used[target] = true
+                    break
+                end
+            end
+        end
+        pcall(function() if root and root.Parent == nil then root:Destroy() end end)
+    end
+end
+
+local function skinApplyColors(desc, character)
+    local colors = character:FindFirstChildOfClass('BodyColors')
+    if not colors then
+        colors = Instance.new('BodyColors')
+        colors:SetAttribute('SakuraProjectLocalSkin', true)
+        colors.Parent = character
+        skinTrack(colors)
+    end
+    local map = {
+        HeadColor = desc.HeadColor,
+        LeftArmColor = desc.LeftArmColor,
+        RightArmColor = desc.RightArmColor,
+        LeftLegColor = desc.LeftLegColor,
+        RightLegColor = desc.RightLegColor,
+        TorsoColor = desc.TorsoColor,
+    }
+    for prop, value in pairs(map) do
+        if value then pcall(function() colors[prop .. '3'] = value end) end
+    end
+end
+
+local function skinApplyClothes(desc, character)
+    local function setClothing(className, prop, value)
+        local obj = character:FindFirstChildOfClass(className)
+        if not obj then
+            obj = Instance.new(className)
+            obj.Name = 'SakuraProjectLocalSkin_' .. className
+            obj:SetAttribute('SakuraProjectLocalSkin', true)
+            obj.Parent = character
+            skinTrack(obj)
+        end
+        if value and tonumber(value) and tonumber(value) ~= 0 then
+            obj[prop] = 'rbxassetid://' .. tostring(value)
+        end
+    end
+    if tonumber(desc.Shirt) and desc.Shirt ~= 0 then setClothing('Shirt', 'ShirtTemplate', desc.Shirt) end
+    if tonumber(desc.Pants) and desc.Pants ~= 0 then setClothing('Pants', 'PantsTemplate', desc.Pants) end
+    if tonumber(desc.GraphicTShirt) and desc.GraphicTShirt ~= 0 then setClothing('ShirtGraphic', 'Graphic', desc.GraphicTShirt) end
+end
+
+local function skinApplyFace(desc, character)
+    local head = character:FindFirstChild('Head')
+    if not head or not tonumber(desc.Face) or tonumber(desc.Face) == 0 then return end
+    local face = head:FindFirstChild('face') or head:FindFirstChild('Face')
+    if not face then
+        face = Instance.new('Decal')
+        face.Name = 'face'
+        face.Face = Enum.NormalId.Front
+        face.Parent = head
+        skinTrack(face)
+    end
+    face.Texture = 'rbxassetid://' .. tostring(desc.Face)
+end
+
+local function skinApplyAccessories(desc, humanoid, character)
+    local accessories = {}
+    local ok, list = pcall(function() return desc:GetAccessories(true) end)
+    if ok and type(list) == 'table' then
+        for _, info in ipairs(list) do
+            if tonumber(info.AssetId) and tonumber(info.AssetId) ~= 0 then
+                table.insert(accessories, tonumber(info.AssetId))
+            end
+        end
+    end
+    -- Fallback for older descriptions that do not expose GetAccessories properly.
+    if #accessories == 0 then
+        local props = {'BackAccessory','FaceAccessory','FrontAccessory','HairAccessory','HatAccessory','NeckAccessory','ShouldersAccessory','WaistAccessory'}
+        for _, prop in ipairs(props) do
+            local value = tostring(desc[prop] or '')
+            for id in string.gmatch(value, '%d+') do table.insert(accessories, tonumber(id)) end
+        end
+    end
+
+    local seen = {}
+    for _, assetId in ipairs(accessories) do
+        if not seen[assetId] then
+            seen[assetId] = true
+            for _, root in ipairs(skinLoadObjects(assetId)) do
+                local acc = root:IsA('Accessory') and root or root:FindFirstChildWhichIsA('Accessory', true)
+                if acc then
+                    acc:SetAttribute('SakuraProjectLocalSkin', true)
+                    acc.Parent = character
+                    skinTrack(acc)
+                    pcall(function() humanoid:AddAccessory(acc) end)
+                else
+                    pcall(function() root:Destroy() end)
+                end
+            end
+        end
+    end
+end
+
+local function skinApplyScales(desc, humanoid)
+    local scaleMap = {
+        BodyDepthScale = desc.DepthScale,
+        BodyHeightScale = desc.HeightScale,
+        BodyWidthScale = desc.WidthScale,
+        BodyProportionScale = desc.ProportionScale,
+        BodyTypeScale = desc.BodyTypeScale,
+        HeadScale = desc.HeadScale,
+    }
+    for name, value in pairs(scaleMap) do
+        local obj = humanoid.Parent and humanoid.Parent:FindFirstChild(name)
+        if obj and typeof(value) == 'number' then pcall(function() obj.Value = value end) end
+    end
+end
+
+local function applyDescriptionLocally(desc, label)
+    local character, humanoid = getSkinHumanoid()
+    if not character or not humanoid then error('Character/Humanoid not found') end
+    skinSnapshotCharacter(character)
+    skinDestroyLocalObjects()
+
+    -- Body packages. The source page calls these "costumes"; we resolve the
+    -- description first and then copy its body assets into the live character.
+    skinApplyBodyAsset(desc.Head, {'Head'})
+    skinApplyBodyAsset(desc.Torso, {'UpperTorso','Torso','LowerTorso'})
+    skinApplyBodyAsset(desc.LeftArm, {'LeftUpperArm','LeftLowerArm','LeftHand','Left Arm'})
+    skinApplyBodyAsset(desc.RightArm, {'RightUpperArm','RightLowerArm','RightHand','Right Arm'})
+    skinApplyBodyAsset(desc.LeftLeg, {'LeftUpperLeg','LeftLowerLeg','LeftFoot','Left Leg'})
+    skinApplyBodyAsset(desc.RightLeg, {'RightUpperLeg','RightLowerLeg','RightFoot','Right Leg'})
+    skinApplyColors(desc, character)
+    skinApplyClothes(desc, character)
+    skinApplyFace(desc, character)
+    skinApplyScales(desc, humanoid)
+    skinApplyAccessories(desc, humanoid, character)
+
+    SkinCurrentLabel = label
+end
+
+local function getOutfitDescription(id)
+    local ok, result = pcall(function()
+        return Players:GetHumanoidDescriptionFromOutfitIdAsync(tonumber(id))
+    end)
+    if ok and result then return result end
+
+    -- Some of the supplied IDs are bundle IDs rather than UserOutfit IDs.
+    local details = game:GetService('AssetService'):GetBundleDetailsAsync(tonumber(id))
+    local userOutfitId
+    for _, item in ipairs(details.Items or {}) do
+        if item.Type == 'UserOutfit' and tonumber(item.Id) then
+            userOutfitId = tonumber(item.Id)
+            break
+        end
+    end
+    if not userOutfitId then error(tostring(result or 'No UserOutfit found')) end
+    return Players:GetHumanoidDescriptionFromOutfitIdAsync(userOutfitId)
 end
 
 local function applyOutfitId(outfitId, label)
@@ -4835,44 +5166,17 @@ local function applyOutfitId(outfitId, label)
     end
     SkinApplyBusy = true
     local ok, err = pcall(function()
-        if not SavedDescriptionValid then
-            SavedHumanoidDescription = humanoid:GetAppliedDescription()
-            SavedDescriptionValid = SavedHumanoidDescription ~= nil
-        end
-        local id = tonumber(outfitId)
-        local desc
-        local directOk, directResult = pcall(function()
-            return Players:GetHumanoidDescriptionFromOutfitIdAsync(id)
-        end)
-        if directOk and directResult then
-            desc = directResult
-        else
-            -- The source calls these entries "Костюм"; if an entry is a bundle ID,
-            -- resolve its UserOutfit first, then request the HumanoidDescription.
-            local details = game:GetService('AssetService'):GetBundleDetailsAsync(id)
-            local userOutfitId
-            for _, item in ipairs(details.Items or {}) do
-                if item.Type == 'UserOutfit' and tonumber(item.Id) then
-                    userOutfitId = tonumber(item.Id)
-                    break
-                end
-            end
-            if not userOutfitId then error(directResult or 'No UserOutfit found') end
-            desc = Players:GetHumanoidDescriptionFromOutfitIdAsync(userOutfitId)
-        end
-        humanoid:ApplyDescriptionAsync(desc)
+        local desc = getOutfitDescription(outfitId)
+        applyDescriptionLocally(desc, label)
     end)
     SkinApplyBusy = false
     if ok then
-        SkinChangerApplied = true
-        Window:Notify({Title='Skin Changer', Description=tostring(label) .. ' applied.', Duration=3})
+        Window:Notify({Title='Skin Changer', Description=tostring(label) .. ' applied locally.', Duration=3})
     else
         Window:Notify({Title='Skin Changer', Description='Could not apply ' .. tostring(label) .. ': ' .. tostring(err), Duration=4})
     end
 end
 
--- These are the outfit/bundle IDs listed by the supplied Mops skins page.
--- The page lists nine ready-made costumes.
 local MopsOutfits = {
     {222248886534563, 'Mops Costume 01'},
     {22279615053230, 'Mops Costume 02'},
@@ -4884,11 +5188,11 @@ local MopsOutfits = {
     {91631439505887, 'Mops Costume 08'},
     {114863424051234, 'Mops Costume 09'},
 }
-for index, preset in ipairs(MopsOutfits) do
+for _, preset in ipairs(MopsOutfits) do
     local id, name = preset[1], preset[2]
     Window:AddButton({
         Title = name,
-        Description = 'Full outfit preset • ID ' .. tostring(id),
+        Description = 'Full outfit • LOCAL visual copy • ID ' .. tostring(id),
         Tab = SkinChangerTab,
         Callback = function() applyOutfitId(id, name) end,
     })
@@ -4896,65 +5200,46 @@ end
 
 Window:AddSection({Name = 'Cute / Milashka Presets', Tab = SkinChangerTab})
 
--- These sets are assembled from the exact item IDs/names published on the supplied 2026 page.
--- Because these are item lists rather than outfit IDs, the helper applies compatible fields individually.
 local MilashkaSets = {
-    {
-        name = 'Milashka_03709 • Black Neko',
-        items = {10930362495, 13886546559, 14473722760, 14618207727, 73422661700694, 76347276059872, 106330973785235, 123863011354736, 132665376085952},
-    },
-    {
-        name = 'milashka10102019 • Pink & White Kawaii',
-        items = {12531188286, 15938951885, 95312957061869, 101556001990514, 109965457170229, 131429879743025, 139929216393468},
-    },
-    {
-        name = 'Milashka_03709 • Y2K Grunge',
-        items = {70972365842585, 109711115364795},
-    },
-    {
-        name = 'milashka_love222 • Bunny / Black & Red',
-        items = {14618207727, 91474821972762, 98145245029080, 108052524034650, 125225445519700, 127695465501041},
-    },
-    {
-        name = 'Oigmsgf • Cute Black Dress',
-        items = {13156797522, 13253945492, 14183430773, 14820341694, 15339167928, 78761836930990, 114491571252088, 136439847526611},
-    },
+    {name='Milashka_03709 • Black Neko', items={10930362495,13886546559,14473722760,14618207727,73422661700694,76347276059872,106330973785235,123863011354736,132665376085952}},
+    {name='milashka10102019 • Pink & White Kawaii', items={12531188286,15938951885,95312957061869,101556001990514,109965457170229,131429879743025,139929216393468}},
+    {name='Milashka_03709 • Y2K Grunge', items={70972365842585,109711115364795}},
+    {name='milashka_love222 • Bunny / Black & Red', items={14618207727,91474821972762,98145245029080,108052524034650,125225445519700,127695465501041}},
+    {name='Oigmsgf • Cute Black Dress', items={13156797522,13253945492,14183430773,14820341694,15339167928,78761836930990,114491571252088,136439847526611}},
 }
 
 local function applyMilashkaSet(set)
+    if SkinApplyBusy then return end
     local character, humanoid = getSkinHumanoid()
     if not character or not humanoid then
         Window:Notify({Title='Skin Changer', Description='Character/Humanoid not found.', Duration=3})
         return
     end
-    if SkinApplyBusy then return end
     SkinApplyBusy = true
     local ok, err = pcall(function()
-        if not SavedDescriptionValid then
-            SavedHumanoidDescription = humanoid:GetAppliedDescription()
-            SavedDescriptionValid = SavedHumanoidDescription ~= nil
-        end
-        -- Load each listed Roblox asset and attach the actual Shirt/Pants/Accessory object.
-        -- This is more reliable for mixed classic + accessory lists than guessing an AssetTypeId.
+        skinSnapshotCharacter(character)
+        skinDestroyLocalObjects()
         for _, assetId in ipairs(set.items or {}) do
-            local objects = game:GetObjects('rbxassetid://' .. tostring(assetId))
-            for _, obj in ipairs(objects) do
-                if obj:IsA('Accessory') then
-                    obj:SetAttribute('SakuraProjectLocalSkin', true)
-                    obj.Parent = character
-                    pcall(function() humanoid:AddAccessory(obj) end)
-                elseif obj:IsA('Shirt') or obj:IsA('Pants') or obj:IsA('ShirtGraphic') then
-                    obj:SetAttribute('SakuraProjectLocalSkin', true)
-                    obj.Parent = character
-                elseif obj then
-                    obj:Destroy()
+            for _, root in ipairs(skinLoadObjects(assetId)) do
+                local acc = root:IsA('Accessory') and root or root:FindFirstChildWhichIsA('Accessory', true)
+                if acc then
+                    acc:SetAttribute('SakuraProjectLocalSkin', true)
+                    acc.Parent = character
+                    skinTrack(acc)
+                    pcall(function() humanoid:AddAccessory(acc) end)
+                elseif root:IsA('Shirt') or root:IsA('Pants') or root:IsA('ShirtGraphic') then
+                    root:SetAttribute('SakuraProjectLocalSkin', true)
+                    root.Parent = character
+                    skinTrack(root)
+                elseif root then
+                    root:Destroy()
                 end
             end
         end
+        SkinCurrentLabel = set.name
     end)
     SkinApplyBusy = false
     if ok then
-        SkinChangerApplied = true
         Window:Notify({Title='Skin Changer', Description=set.name .. ' applied locally.', Duration=3})
     else
         Window:Notify({Title='Skin Changer', Description='Could not apply set: ' .. tostring(err), Duration=4})
@@ -4965,7 +5250,7 @@ for _, set in ipairs(MilashkaSets) do
     local preset = set
     Window:AddButton({
         Title = preset.name,
-        Description = 'Cute full-style preset from the supplied 2026 item list',
+        Description = 'Local visual preset from the supplied 2026 item list',
         Tab = SkinChangerTab,
         Callback = function() applyMilashkaSet(preset) end,
     })
@@ -4974,11 +5259,11 @@ end
 Window:AddSection({Name = 'Skin Controls', Tab = SkinChangerTab})
 Window:AddButton({
     Title = 'Restore Original Avatar',
-    Description = 'Restore the avatar description saved before the last skin',
+    Description = 'Restore the appearance captured before the first skin',
     Tab = SkinChangerTab,
     Callback = function()
-        local ok, err = restoreOriginalAvatar()
-        Window:Notify({Title='Skin Changer', Description=ok and 'Original avatar restored.' or tostring(err), Duration=3})
+        local ok = skinRestoreSnapshot()
+        Window:Notify({Title='Skin Changer', Description=ok and 'Original avatar restored.' or 'Original avatar snapshot is unavailable.', Duration=3})
     end,
 })
 
