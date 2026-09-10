@@ -83,7 +83,7 @@ end
 Window = Library:CreateWindow({
     Title = 'Sakura Project',
     Theme = 'Dark',
-    Size = UDim2.fromOffset(800, 540),
+    Size = UDim2.fromOffset(700, 500),
     Transparency = 0.1,
     Blurring = true,
     MinimizeKeybind = Enum.KeyCode.LeftAlt,
@@ -1643,40 +1643,26 @@ Window:AddToggle({
         end
     end,
 })
--- ===== FARM COIN V2: FAST TELEPORT / NOCLIP COIN LOOP =====
--- V2 is independent from the old farm state. It scans every descendant in the
--- active CoinContainer, repeatedly touches all available coins, and teleports
--- the local root directly onto the nearest target. This avoids TweenService
--- being cancelled by character physics/network ownership.
+-- ===== FARM COIN V2: AGGRESSIVE NOCLIP / ROUND-ROBIN COLLECTOR =====
+-- V2 deliberately does not depend on the game's bag counter or Alive attribute.
+-- Those checks were the reason the previous version could stop after one coin.
 local FarmCoinV2Enabled = false
-local FarmCoinV2Speed = 120
+local FarmCoinV2Speed = 180
 local FarmCoinV2Connection = nil
-local FarmCoinV2Target = nil
-local FarmCoinV2LastTarget = nil
-local FarmCoinV2LastMove = 0
 local FarmCoinV2Original = {}
+local FarmCoinV2Retry = {}
+local FarmCoinV2LastCoin = nil
+local FarmCoinV2LastScan = 0
 
 local function farmCoinV2GetContainer()
-    local direct = returncoincontainer()
-    if direct then return direct end
+    local c = returncoincontainer()
+    if c then return c end
     for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA('Folder') or obj:IsA('Model') then
-            if obj.Name == 'CoinContainer' then return obj end
+        if (obj:IsA('Folder') or obj:IsA('Model')) and obj.Name == 'CoinContainer' then
+            return obj
         end
     end
-end
-
-local function farmCoinV2Coins(container)
-    local list = {}
-    if not container then return list end
-    for _, obj in ipairs(container:GetDescendants()) do
-        if obj:IsA('BasePart') and obj:GetAttribute('CoinID') == 'Coin' and obj.Parent then
-            -- A collected coin normally disappears or changes state. Do not
-            -- require Transparency/TouchInterest because those can be delayed.
-            table.insert(list, obj)
-        end
-    end
-    return list
+    return nil
 end
 
 local function farmCoinV2SetNoclip(character, enabled)
@@ -1684,18 +1670,18 @@ local function farmCoinV2SetNoclip(character, enabled)
         if part:IsA('BasePart') then
             if enabled then
                 if not FarmCoinV2Original[part] then
-                    FarmCoinV2Original[part] = {CanCollide = part.CanCollide, CanTouch = part.CanTouch, Massless = part.Massless}
+                    FarmCoinV2Original[part] = {CanCollide=part.CanCollide, CanTouch=part.CanTouch, Massless=part.Massless}
                 end
-                part.CanCollide = false
-                part.CanTouch = true
-                part.Massless = true
+                part.CanCollide=false
+                part.CanTouch=true
+                part.Massless=true
             else
-                local old = FarmCoinV2Original[part]
+                local old=FarmCoinV2Original[part]
                 if old then
                     pcall(function()
-                        part.CanCollide = old.CanCollide
-                        part.CanTouch = old.CanTouch
-                        part.Massless = old.Massless
+                        part.CanCollide=old.CanCollide
+                        part.CanTouch=old.CanTouch
+                        part.Massless=old.Massless
                     end)
                 end
             end
@@ -1703,98 +1689,92 @@ local function farmCoinV2SetNoclip(character, enabled)
     end
 end
 
-local function farmCoinV2Touch(root, coin)
-    if not root or not coin or not coin.Parent then return end
+local function farmCoinV2IsAvailable(coin)
+    if not coin or not coin.Parent or not coin:IsA('BasePart') then return false end
+    if coin:GetAttribute('CoinID') ~= 'Coin' then return false end
+    -- MM2's coin objects can be transparent while still being collectible.
+    -- Do not require Transparency or TouchInterest: both can update a frame late.
+    if coin.CanTouch == false and not coin:FindFirstChild('TouchInterest') then return false end
+    local retry=FarmCoinV2Retry[coin]
+    if retry and os.clock() < retry then return false end
+    return true
+end
+
+local function farmCoinV2Collect(root, coin)
+    if not root or not coin or not coin.Parent then return false end
     pcall(function()
         firetouchinterest(root, coin, 0)
         firetouchinterest(root, coin, 1)
     end)
-    -- Some versions of the game attach the touch receiver to the coin's
-    -- immediate parent. Try that too without requiring it to exist.
-    local parent = coin.Parent
-    if parent and parent:IsA('BasePart') then
-        pcall(function()
-            firetouchinterest(root, parent, 0)
-            firetouchinterest(root, parent, 1)
-        end)
-    end
+    -- Give the server/client coin logic a short retry window instead of locking
+    -- onto the same coin forever.
+    FarmCoinV2Retry[coin]=os.clock()+math.clamp(0.22-(FarmCoinV2Speed/1000),0.05,0.22)
+    FarmCoinV2LastCoin=coin
+    return true
 end
 
 local function farmCoinV2Stop()
-    FarmCoinV2Enabled = false
-    FarmCoinV2Target = nil
-    FarmCoinV2LastTarget = nil
+    FarmCoinV2Enabled=false
     if FarmCoinV2Connection then FarmCoinV2Connection:Disconnect(); FarmCoinV2Connection=nil end
-    local character = p.Character
-    if character then
-        farmCoinV2SetNoclip(character, false)
-        local hum = character:FindFirstChildOfClass('Humanoid')
-        if hum then pcall(function() hum.PlatformStand=false end) end
-        local root = character:FindFirstChild('HumanoidRootPart')
-        if root then root.Velocity=Vector3.zero; root.RotVelocity=Vector3.zero end
-    end
-    FarmCoinV2Original = {}
+    local character=p.Character
+    if character then farmCoinV2SetNoclip(character,false) end
+    FarmCoinV2Original={}
+    FarmCoinV2Retry={}
+    FarmCoinV2LastCoin=nil
 end
 
 local function farmCoinV2Start()
     farmCoinV2Stop()
-    local character = p.Character
-    local root = character and character:FindFirstChild('HumanoidRootPart')
-    if not root or p:GetAttribute('Alive') ~= true then return end
-    FarmCoinV2Enabled = true
-    FarmCoinV2Connection = RunService.Heartbeat:Connect(function()
+    FarmCoinV2Enabled=true
+    FarmCoinV2Connection=RunService.Heartbeat:Connect(function()
         if not FarmCoinV2Enabled then return end
-        character = p.Character
-        root = character and character:FindFirstChild('HumanoidRootPart')
-        if not character or not root or p:GetAttribute('Alive') ~= true then return end
+        local character=p.Character
+        local root=character and character:FindFirstChild('HumanoidRootPart')
+        local humanoid=character and character:FindFirstChildOfClass('Humanoid')
+        if not character or not root or not humanoid or humanoid.Health<=0 then return end
 
-        farmCoinV2SetNoclip(character, true)
-        local hum = character:FindFirstChildOfClass('Humanoid')
-        if hum then pcall(function() hum.PlatformStand=true end) end
+        farmCoinV2SetNoclip(character,true)
+        local container=farmCoinV2GetContainer()
+        if not container then return end
 
-        local container = farmCoinV2GetContainer()
-        local coins = farmCoinV2Coins(container)
-        if #coins == 0 then
-            FarmCoinV2Target=nil
-            return
-        end
+        -- Scan at a stable rate, then collect the nearest available coin. The
+        -- retry table prevents a single invisible/lagged coin from blocking all
+        -- later coins.
+        local now=os.clock()
+        if now-FarmCoinV2LastScan < math.clamp(1/math.max(FarmCoinV2Speed,1),0.004,0.03) then return end
+        FarmCoinV2LastScan=now
 
-        -- Burst-touch every currently available coin first. This catches coins
-        -- already near the player and makes collection much faster.
-        for _, coin in ipairs(coins) do
-            farmCoinV2Touch(root, coin)
-        end
-
-        local nearest, best = nil, math.huge
-        for _, coin in ipairs(coins) do
-            if coin.Parent then
+        local nearest=nil
+        local best=math.huge
+        for _,coin in ipairs(container:GetDescendants()) do
+            if farmCoinV2IsAvailable(coin) then
                 local d=(root.Position-coin.Position).Magnitude
-                if d < best then nearest=coin; best=d end
+                if d<best then nearest=coin; best=d end
             end
         end
         if not nearest then return end
 
-        FarmCoinV2Target=nearest
-        local now=os.clock()
-        -- Direct CFrame movement is deliberate: TweenService can lose control
-        -- of the root when Humanoid/physics updates on the same frame.
-        local moveInterval = math.clamp(1 / math.max(FarmCoinV2Speed, 1), 0.004, 0.035)
-        if FarmCoinV2LastTarget ~= nearest or now-FarmCoinV2LastMove >= moveInterval then
-            FarmCoinV2LastTarget=nearest
-            FarmCoinV2LastMove=now
-            pcall(function()
-                root.CFrame = CFrame.new(nearest.Position - Vector3.new(0, 2.35, 0)) * CFrame.Angles(math.rad(90),0,0)
-                root.Velocity=Vector3.zero
-                root.RotVelocity=Vector3.zero
-            end)
-            farmCoinV2Touch(root, nearest)
+        -- Teleport through walls and immediately touch the coin. Noclip is
+        -- maintained every Heartbeat, so map geometry cannot block the route.
+        pcall(function()
+            root.CFrame=CFrame.new(nearest.Position)
+            root.AssemblyLinearVelocity=Vector3.zero
+            root.AssemblyAngularVelocity=Vector3.zero
+        end)
+        farmCoinV2Collect(root,nearest)
+
+        -- Burst nearby coins in the same frame for much faster collection.
+        for _,coin in ipairs(container:GetDescendants()) do
+            if coin~=nearest and farmCoinV2IsAvailable(coin) and (root.Position-coin.Position).Magnitude<=8 then
+                farmCoinV2Collect(root,coin)
+            end
         end
     end)
 end
 
 Window:AddToggle({
     Title = 'Farm Coin V2',
-    Description = 'Same coin farm as Farm Coins, but with faster travel',
+    Description = 'Aggressive teleport + noclip + repeated touch collection',
     Default = false,
     Tab = AutoFarmTab,
     Callback = function(enabled)
@@ -1813,9 +1793,9 @@ Window:AddToggle({
 Window:AddSlider({
     Title = 'Farm Coin V2 Speed',
     Description = 'Travel speed for the faster coin farm',
-    Default = 120,
+    Default = 180,
     MinValue = 60,
-    MaxValue = 250,
+    MaxValue = 300,
     AllowDecimals = false,
     Tab = AutoFarmTab,
     Callback = function(value) FarmCoinV2Speed = value end,
@@ -4846,44 +4826,34 @@ MiscTab = Window:AddTab({
     Icon = 'rbxassetid://11963373994',
 })
 
--- ===== SAKURA PROJECT: SKIN CHANGER (LOCAL VISUAL MODEL ENGINE) =====
--- Local-only avatar renderer. It never calls Humanoid:ApplyDescriptionAsync().
--- Roblox documents CreateHumanoidModelFromDescriptionAsync() as a way to build
--- a complete Humanoid model from a HumanoidDescription; we use that model as
--- the source and transplant its visual parts/accessories into the live client
--- character instead of asking the server to apply the description.
+-- ===== SAKURA PROJECT: SKIN CHANGER v8 (DIRECT LOCAL ASSET ENGINE) =====
+-- The old HumanoidDescription body-shell renderer was too fragile for catalog
+-- accessories. v8 uses direct local asset insertion first, then HumanoidDescription
+-- only for full outfit IDs. Nothing here changes server inventory or ownership.
 SkinChangerTab = Window:AddTab({
     Title = 'Skin Changer',
     Icon = 'rbxassetid://11963373994',
 })
 
-Window:AddSection({Name = 'Full Outfit Presets', Tab = SkinChangerTab})
+local SkinBusy = false
+local SkinObjects = {}
+local SkinSnapshot = nil
+local SkinItemInput = ''
+local SkinOutfitInput = ''
 
-local SkinApplyBusy = false
-local SkinOriginalSnapshot = nil
-local SkinLocalObjects = {}
-local SkinCurrentLabel = nil
-local SkinOldBodyParts = {}
-
-local function getSkinHumanoid()
-    local character = p and p.Character
-    local humanoid = character and character:FindFirstChildOfClass('Humanoid')
-    if character and humanoid then return character, humanoid end
-    return nil, nil
-end
-
-local function skinTrack(obj)
-    if obj then table.insert(SkinLocalObjects, obj) end
+local function skinTag(obj)
+    if obj then
+        pcall(function() obj:SetAttribute('SakuraProjectLocalSkin', true) end)
+        table.insert(SkinObjects, obj)
+    end
     return obj
 end
 
-local function skinDestroyLocalObjects()
-    for i = #SkinLocalObjects, 1, -1 do
-        local obj = SkinLocalObjects[i]
-        pcall(function()
-            if obj and obj.Parent then obj:Destroy() end
-        end)
-        SkinLocalObjects[i] = nil
+local function skinClearLocal()
+    for i = #SkinObjects, 1, -1 do
+        local obj = SkinObjects[i]
+        pcall(function() if obj and obj.Parent then obj:Destroy() end end)
+        SkinObjects[i] = nil
     end
     local character = p and p.Character
     if character then
@@ -4895,495 +4865,272 @@ local function skinDestroyLocalObjects()
     end
 end
 
-local function skinSnapshotCharacter(character)
-    if SkinOriginalSnapshot and SkinOriginalSnapshot.character == character then return end
-    local snap = {character = character, body = {}, joints = {}, clothes = {}, accessories = {}, colors = nil, scales = {}}
-
-    for _, obj in ipairs(character:GetDescendants()) do
-        if obj:IsA('Motor6D') then
-            snap.joints[obj] = {
-                parent = obj.Parent,
-                part0 = obj.Part0,
-                part1 = obj.Part1,
-                c0 = obj.C0,
-                c1 = obj.C1,
-                transform = obj.Transform,
-            }
-        elseif obj:IsA('BasePart') and obj.Name ~= 'HumanoidRootPart' then
-            snap.body[obj] = {name=obj.Name, transparency=obj.Transparency, parent=obj.Parent}
-        elseif obj:IsA('BodyColors') then
-            snap.colors = obj:Clone()
-        elseif obj:IsA('NumberValue') and string.find(obj.Name, 'Scale', 1, true) then
-            snap.scales[obj.Name] = obj.Value
+local function skinSnapshot(character)
+    if SkinSnapshot and SkinSnapshot.character == character then return end
+    SkinSnapshot = {
+        character = character,
+        accessories = {},
+        shirt = nil,
+        pants = nil,
+        tshirt = nil,
+        faceTexture = nil,
+    }
+    for _, obj in ipairs(character:GetChildren()) do
+        if obj:IsA('Accessory') then
+            table.insert(SkinSnapshot.accessories, obj:Clone())
+        elseif obj:IsA('Shirt') then
+            SkinSnapshot.shirt = obj:Clone()
+        elseif obj:IsA('Pants') then
+            SkinSnapshot.pants = obj:Clone()
+        elseif obj:IsA('ShirtGraphic') then
+            SkinSnapshot.tshirt = obj:Clone()
         end
     end
-    for _, obj in ipairs(character:GetChildren()) do
-        if obj:IsA('Accessory') then table.insert(snap.accessories, obj:Clone())
-        elseif obj:IsA('Shirt') then snap.clothes.Shirt = obj:Clone()
-        elseif obj:IsA('Pants') then snap.clothes.Pants = obj:Clone()
-        elseif obj:IsA('ShirtGraphic') then snap.clothes.ShirtGraphic = obj:Clone() end
+    local head = character:FindFirstChild('Head')
+    if head then
+        local face = head:FindFirstChild('face') or head:FindFirstChild('Face')
+        if face and face:IsA('Decal') then SkinSnapshot.faceTexture = face.Texture end
     end
-    SkinOriginalSnapshot = snap
 end
 
-local function skinRestoreSnapshot()
+local function skinRestore()
     local character = p and p.Character
-    local snap = SkinOriginalSnapshot
-    if not character or not snap or snap.character ~= character then return false end
-
-    skinDestroyLocalObjects()
-
-    -- Remove body replacements and restore the original character body if it
-    -- was retained. Normally the Roblox character itself survives respawns.
-    for oldPart, data in pairs(SkinOldBodyParts) do
-        if oldPart and oldPart.Parent then
-            pcall(function()
-                oldPart.Name = data.name or oldPart.Name
-                oldPart.Transparency = data.transparency or 0
-            end)
-        end
-    end
-    SkinOldBodyParts = {}
-
-    -- Restore original clothing/accessories from the saved clones.
+    if not character or not SkinSnapshot or SkinSnapshot.character ~= character then return false end
+    skinClearLocal()
     for _, obj in ipairs(character:GetChildren()) do
         if obj:IsA('Accessory') or obj:IsA('Shirt') or obj:IsA('Pants') or obj:IsA('ShirtGraphic') then
             pcall(function() obj:Destroy() end)
         end
     end
-    for _, obj in ipairs(snap.accessories or {}) do
-        pcall(function() local clone=obj:Clone(); clone.Parent=character end)
+    for _, obj in ipairs(SkinSnapshot.accessories) do
+        pcall(function() obj:Clone().Parent = character end)
     end
-    for _, key in ipairs({'Shirt','Pants','ShirtGraphic'}) do
-        local obj=snap.clothes[key]
-        if obj then pcall(function() local clone=obj:Clone(); clone.Parent=character end) end
-    end
-    if snap.colors then
-        local current=character:FindFirstChildOfClass('BodyColors')
-        if current then pcall(function() current:Destroy() end) end
-        local clone=snap.colors:Clone(); clone.Parent=character
-    end
-
-    -- Reconnect original joints to their original parts.
-    for joint, data in pairs(snap.joints) do
-        if joint and joint.Parent then
-            pcall(function()
-                joint.Part0 = data.part0
-                joint.Part1 = data.part1
-                joint.C0 = data.c0
-                joint.C1 = data.c1
-                joint.Transform = data.transform
-                joint.Parent = data.parent or character
-            end)
-        end
-    end
-    for name, value in pairs(snap.scales) do
-        local obj = character:FindFirstChild(name)
-        if obj and obj:IsA('NumberValue') then pcall(function() obj.Value = value end) end
+    if SkinSnapshot.shirt then pcall(function() SkinSnapshot.shirt:Clone().Parent = character end) end
+    if SkinSnapshot.pants then pcall(function() SkinSnapshot.pants:Clone().Parent = character end) end
+    if SkinSnapshot.tshirt then pcall(function() SkinSnapshot.tshirt:Clone().Parent = character end) end
+    if SkinSnapshot.faceTexture then
+        local head = character:FindFirstChild('Head')
+        local face = head and (head:FindFirstChild('face') or head:FindFirstChild('Face'))
+        if face and face:IsA('Decal') then face.Texture = SkinSnapshot.faceTexture end
     end
     return true
 end
 
-local function skinCreateDescriptionModel(desc, humanoid)
-    local ok, model = pcall(function()
-        return Players:CreateHumanoidModelFromDescriptionAsync(desc, humanoid.RigType)
+local function skinFindObjects(root, out)
+    out = out or {}
+    if root:IsA('Accessory') or root:IsA('Shirt') or root:IsA('Pants') or root:IsA('ShirtGraphic') then
+        table.insert(out, root)
+    end
+    for _, child in ipairs(root:GetChildren()) do
+        skinFindObjects(child, out)
+    end
+    return out
+end
+
+local function skinLoadAsset(assetId)
+    local ok, objects = pcall(function()
+        return game:GetObjects('rbxassetid://' .. tostring(assetId))
     end)
-    if ok and model then return model end
-    error(tostring(model or 'CreateHumanoidModelFromDescriptionAsync failed'))
+    if not ok or type(objects) ~= 'table' then
+        error('GetObjects failed for asset ' .. tostring(assetId))
+    end
+    local found = {}
+    for _, root in ipairs(objects) do
+        skinFindObjects(root, found)
+    end
+    return found, objects
 end
 
-local function skinMakeVisualModel(desc, character, humanoid)
-    -- IMPORTANT: never replace/re-parent the live character's Motor6Ds or body
-    -- parts. That was causing broken/empty body areas. Build a complete source
-    -- model and attach only visual clones to the existing body parts.
-    local sourceModel = skinCreateDescriptionModel(desc, humanoid)
-    local bodyNames = {'Head','UpperTorso','LowerTorso','LeftUpperArm','LeftLowerArm','LeftHand','RightUpperArm','RightLowerArm','RightHand','LeftUpperLeg','LeftLowerLeg','LeftFoot','RightUpperLeg','RightLowerLeg','RightFoot','Torso','Left Arm','Right Arm','Left Leg','Right Leg'}
-
-    local targets={}
-    for _,name in ipairs(bodyNames) do
-        local t=character:FindFirstChild(name)
-        if t and t:IsA('BasePart') then targets[name]=t end
-    end
-
-    -- Clone visual body parts and weld them to the existing rig. The original
-    -- rig stays intact and continues to drive movement/physics.
-    for _,sourcePart in ipairs(sourceModel:GetChildren()) do
-        if sourcePart:IsA('BasePart') and sourcePart.Name~='HumanoidRootPart' then
-            local target=targets[sourcePart.Name]
-            if target then
-                local clone=sourcePart:Clone()
-                for _,d in ipairs(clone:GetDescendants()) do
-                    if d:IsA('Motor6D') or d:IsA('Weld') or d:IsA('WeldConstraint') then
-                        pcall(function() d:Destroy() end)
-                    end
-                end
-                clone.Name='SakuraSkin_'..sourcePart.Name
-                clone.CFrame=target.CFrame
-                clone.Anchored=false
-                clone.CanCollide=false
-                clone.CanTouch=false
-                clone.CanQuery=false
-                clone.Massless=true
-                clone:SetAttribute('SakuraProjectLocalSkin',true)
-                clone.Parent=character
-                local weld=Instance.new('WeldConstraint')
-                weld.Name='SakuraSkinWeld'
-                weld.Part0=target
-                weld.Part1=clone
-                weld.Parent=clone
-                skinTrack(clone)
-                -- Hide only the original visual surface; physics/joints remain.
-                SkinOldBodyParts[target]={name=target.Name,transparency=target.Transparency}
-                target.Transparency=1
-            end
+local function skinEquipObject(obj, character, humanoid)
+    if obj:IsA('Accessory') then
+        local clone = obj:Clone()
+        clone.Name = 'SakuraSkin_' .. tostring(obj.Name)
+        skinTag(clone)
+        clone.Parent = character
+        -- AddAccessory creates the normal attachment weld. Roblox documents
+        -- Accessory as the character-wearable class with Handle attachments.
+        local ok = pcall(function() humanoid:AddAccessory(clone) end)
+        if not ok then
+            -- Fallback: preserve the accessory if AddAccessory is unavailable.
+            -- Most catalog accessories have matching attachments and will fit.
+            clone.Parent = character
         end
-    end
-
-    local sourceColors=sourceModel:FindFirstChildOfClass('BodyColors')
-    if sourceColors then
-        local colors=character:FindFirstChildOfClass('BodyColors')
-        if not colors then
-            colors=Instance.new('BodyColors')
-            colors.Parent=character
-            skinTrack(colors)
-        end
-        for _,prop in ipairs({'HeadColor3','LeftArmColor3','RightArmColor3','LeftLegColor3','RightLegColor3','TorsoColor3'}) do
-            pcall(function() colors[prop]=sourceColors[prop] end)
-        end
-    end
-
-    -- Replace clothing cleanly.
-    for _,className in ipairs({'Shirt','Pants','ShirtGraphic'}) do
-        local old=character:FindFirstChildOfClass(className)
-        if old then pcall(function() old:Destroy() end) end
-        local src=sourceModel:FindFirstChildOfClass(className)
-        if src then
-            local clone=src:Clone()
-            clone:SetAttribute('SakuraProjectLocalSkin',true)
-            clone.Parent=character
-            skinTrack(clone)
-        end
-    end
-
-    -- Accessories are already fitted by Roblox in the generated source model.
-    -- Clone them directly instead of trying to re-run server-side avatar APIs.
-    for _,source in ipairs(sourceModel:GetChildren()) do
-        if source:IsA('Accessory') then
-            local clone=source:Clone()
-            clone:SetAttribute('SakuraProjectLocalSkin',true)
-            clone.Parent=character
-            skinTrack(clone)
-            pcall(function() humanoid:AddAccessory(clone) end)
-        end
-    end
-
-    -- Face decal.
-    local sourceHead=sourceModel:FindFirstChild('Head')
-    local targetHead=character:FindFirstChild('Head')
-    if sourceHead and targetHead then
-        local srcFace=sourceHead:FindFirstChild('face') or sourceHead:FindFirstChild('Face')
-        local dstFace=targetHead:FindFirstChild('face') or targetHead:FindFirstChild('Face')
-        if srcFace and srcFace:IsA('Decal') then
-            if not dstFace then
-                dstFace=srcFace:Clone(); dstFace.Name='face'; dstFace.Parent=targetHead; skinTrack(dstFace)
-            else
-                dstFace.Texture=srcFace.Texture
-            end
-        end
-    end
-
-    pcall(function() sourceModel:Destroy() end)
-end
-
-local function applyDescriptionLocally(desc, label)
-    local character, humanoid = getSkinHumanoid()
-    if not character or not humanoid then error('Character/Humanoid not found') end
-    if SkinCurrentLabel then pcall(skinRestoreSnapshot) end
-    skinSnapshotCharacter(character)
-    skinDestroyLocalObjects()
-    SkinOldBodyParts = {}
-    skinMakeVisualModel(desc, character, humanoid)
-    SkinCurrentLabel = label
-end
-
-local function getOutfitDescription(id)
-    local ok, result = pcall(function()
-        return Players:GetHumanoidDescriptionFromOutfitIdAsync(tonumber(id))
-    end)
-    if ok and result then return result end
-    error(tostring(result or 'Invalid outfit/bundle ID'))
-end
-
-local function applyOutfitId(outfitId, label)
-    if SkinApplyBusy then return end
-    local _, humanoid = getSkinHumanoid()
-    if not humanoid then
-        Window:Notify({Title='Skin Changer', Description='Character/Humanoid not found.', Duration=3})
-        return
-    end
-    SkinApplyBusy = true
-    local ok, err = pcall(function()
-        local desc = getOutfitDescription(outfitId)
-        applyDescriptionLocally(desc, label)
-    end)
-    SkinApplyBusy = false
-    if ok then
-        Window:Notify({Title='Skin Changer', Description=tostring(label) .. ' applied locally.', Duration=3})
-    else
-        Window:Notify({Title='Skin Changer', Description='Could not apply ' .. tostring(label) .. ': ' .. tostring(err), Duration=5})
-    end
-end
-
--- Old user-supplied Mops/Milashka IDs are intentionally removed. These sets
--- use newly researched 2025-2026 catalog assets instead.
-local SakuraSkinSets = {
-    {
-        name = '2026 • Black Street / Neko',
-        ids = {93085894050661, 133881421588973, 70900202875823, 78479406664358},
-    },
-    {
-        name = '2026 • Pink Cat Ribbon',
-        ids = {113074223303024, 107365932698068, 96950229320019, 123149577807585, 78797181387509},
-    },
-    {
-        name = '2026 • Angel Pink',
-        ids = {84100413956770, 98604405382195, 74630922086444, 132413946223644},
-    },
-    {
-        name = '2026 • Emo / Grunge Black',
-        ids = {78580171276956, 70748193206569, 70900202875823, 91431619061146, 78479406664358},
-    },
-    {
-        name = '2026 • Shadow Ninja',
-        ids = {97134815283177, 70900202875823, 78479406664358},
-    },
-}
-
-local MarketplaceService = game:GetService('MarketplaceService')
-
-local function skinAssetTypeToAccessoryType(assetTypeId)
-    local map = {
-        [8] = Enum.AccessoryType.Hat,
-        [41] = Enum.AccessoryType.Hair,
-        [42] = Enum.AccessoryType.Face,
-        [43] = Enum.AccessoryType.Neck,
-        [44] = Enum.AccessoryType.Shoulder,
-        [45] = Enum.AccessoryType.Front,
-        [46] = Enum.AccessoryType.Back,
-        [47] = Enum.AccessoryType.Waist,
-        [64] = Enum.AccessoryType.TShirt,
-        [65] = Enum.AccessoryType.Jacket,
-        [66] = Enum.AccessoryType.Sweater,
-        [67] = Enum.AccessoryType.Shorts,
-        [68] = Enum.AccessoryType.LeftShoe,
-        [69] = Enum.AccessoryType.RightShoe,
-        [70] = Enum.AccessoryType.DressSkirt,
-    }
-    return map[tonumber(assetTypeId)]
-end
-
-local function skinBuildDescriptionFromAssetSet(ids)
-    local desc = Instance.new('HumanoidDescription')
-    local accessories = {}
-    local shirtId, pantsId, tshirtId, faceId = 0, 0, 0, 0
-    local rigidMap = {
-        [8] = Enum.AccessoryType.Hat,
-        [41] = Enum.AccessoryType.Hair,
-        [42] = Enum.AccessoryType.Face,
-        [43] = Enum.AccessoryType.Neck,
-        [44] = Enum.AccessoryType.Shoulder,
-        [45] = Enum.AccessoryType.Front,
-        [46] = Enum.AccessoryType.Back,
-        [47] = Enum.AccessoryType.Waist,
-    }
-    local layeredMap = {
-        [64] = Enum.AccessoryType.TShirt,
-        [65] = Enum.AccessoryType.Jacket,
-        [66] = Enum.AccessoryType.Sweater,
-        [67] = Enum.AccessoryType.Shorts,
-        [68] = Enum.AccessoryType.LeftShoe,
-        [69] = Enum.AccessoryType.RightShoe,
-        [70] = Enum.AccessoryType.DressSkirt,
-    }
-
-    for _, assetId in ipairs(ids) do
-        local id = tonumber(assetId)
-        local infoOk, info = pcall(function()
-            return MarketplaceService:GetProductInfo(id, Enum.InfoType.Asset)
-        end)
-        local typeId = infoOk and info and tonumber(info.AssetTypeId) or nil
-        if rigidMap[typeId] then
-            -- IMPORTANT: rigid entries must NOT have Order. Roblox's
-            -- SetAccessories API uses the absence of Order to route the item
-            -- into Hat/Hair/Face/etc. instead of treating it as layered.
-            table.insert(accessories, {AssetId=id, AccessoryType=rigidMap[typeId]})
-        elseif layeredMap[typeId] then
-            table.insert(accessories, {
-                AssetId=id,
-                AccessoryType=layeredMap[typeId],
-                IsLayered=true,
-                Order=#accessories+1,
-            })
-        elseif typeId == 11 then
-            shirtId=id
-        elseif typeId == 12 then
-            pantsId=id
-        elseif typeId == 2 then
-            tshirtId=id
-        elseif typeId == 18 then
-            faceId=id
-        end
-    end
-
-    if #accessories > 0 then
-        pcall(function() desc:SetAccessories(accessories, true) end)
-    end
-    if shirtId > 0 then desc.Shirt = shirtId end
-    if pantsId > 0 then desc.Pants = pantsId end
-    if tshirtId > 0 then desc.GraphicTShirt = tshirtId end
-    if faceId > 0 then desc.Face = faceId end
-    return desc
-end
-
-local function skinDescriptionHasBody(desc)
-    for _, prop in ipairs({'Head','Torso','LeftArm','RightArm','LeftLeg','RightLeg'}) do
-        local ok, value = pcall(function() return desc[prop] end)
-        if ok and tonumber(value or 0) and tonumber(value) > 0 then return true end
+        return true
+    elseif obj:IsA('Shirt') then
+        local old = character:FindFirstChildOfClass('Shirt')
+        if old then old:Destroy() end
+        local clone=obj:Clone(); clone.Name='SakuraSkin_Shirt'; skinTag(clone); clone.Parent=character
+        return true
+    elseif obj:IsA('Pants') then
+        local old = character:FindFirstChildOfClass('Pants')
+        if old then old:Destroy() end
+        local clone=obj:Clone(); clone.Name='SakuraSkin_Pants'; skinTag(clone); clone.Parent=character
+        return true
+    elseif obj:IsA('ShirtGraphic') then
+        local old = character:FindFirstChildOfClass('ShirtGraphic')
+        if old then old:Destroy() end
+        local clone=obj:Clone(); clone.Name='SakuraSkin_TShirt'; skinTag(clone); clone.Parent=character
+        return true
     end
     return false
 end
 
-local function skinApplyItemsOnly(desc, character, humanoid)
-    local sourceModel = skinCreateDescriptionModel(desc, humanoid)
-    -- Do not hide the live body for ordinary catalog sets. These presets are
-    -- clothes/accessories; keeping the live rig avoids the invisible-body bug.
-    for _, source in ipairs(sourceModel:GetChildren()) do
-        if source:IsA('Accessory') then
-            local clone=source:Clone()
-            clone:SetAttribute('SakuraProjectLocalSkin',true)
-            clone.Parent=character
-            skinTrack(clone)
-            pcall(function() humanoid:AddAccessory(clone) end)
-        elseif source:IsA('Shirt') or source:IsA('Pants') or source:IsA('ShirtGraphic') then
-            local old=character:FindFirstChildOfClass(source.ClassName)
-            if old then pcall(function() old:Destroy() end) end
-            local clone=source:Clone()
-            clone:SetAttribute('SakuraProjectLocalSkin',true)
-            clone.Parent=character
-            skinTrack(clone)
-        end
-    end
-    local sourceHead=sourceModel:FindFirstChild('Head')
-    local targetHead=character:FindFirstChild('Head')
-    if sourceHead and targetHead then
-        local srcFace=sourceHead:FindFirstChild('face') or sourceHead:FindFirstChild('Face')
-        if srcFace and srcFace:IsA('Decal') then
-            local dst=targetHead:FindFirstChild('face') or targetHead:FindFirstChild('Face')
-            if dst and dst:IsA('Decal') then dst.Texture=srcFace.Texture
-            else local clone=srcFace:Clone(); clone.Name='face'; clone:SetAttribute('SakuraProjectLocalSkin',true); clone.Parent=targetHead; skinTrack(clone) end
-        end
-    end
-    pcall(function() sourceModel:Destroy() end)
-end
-
-local function skinApplyDescriptionSet(set)
-    local character, humanoid = getSkinHumanoid()
-    if not character or not humanoid then
-        error('Character/Humanoid not found')
-    end
-    if SkinCurrentLabel then pcall(skinRestoreSnapshot) end
-    skinSnapshotCharacter(character)
-    skinDestroyLocalObjects()
-    SkinOldBodyParts = {}
-    local desc = skinBuildDescriptionFromAssetSet(set.ids)
-    -- Catalog sets are normally clothes/accessories, so use the live body and
-    -- only replace the visual items. Full outfit IDs still use the full local
-    -- avatar renderer below.
-    if skinDescriptionHasBody(desc) then
-        skinMakeVisualModel(desc, character, humanoid)
-    else
-        skinApplyItemsOnly(desc, character, humanoid)
-    end
-    SkinCurrentLabel = set.name
-end
-
-local function skinApplyItemSet(set)
-    if SkinApplyBusy then return end
-    local character, humanoid = getSkinHumanoid()
+local function skinApplyAssets(assetIds, label)
+    if SkinBusy then return end
+    local character = p and p.Character
+    local humanoid = character and character:FindFirstChildOfClass('Humanoid')
     if not character or not humanoid then
         Window:Notify({Title='Skin Changer', Description='Character/Humanoid not found.', Duration=3})
         return
     end
-    SkinApplyBusy = true
+    SkinBusy = true
     local ok, err = pcall(function()
-        skinApplyDescriptionSet(set)
+        skinSnapshot(character)
+        -- Always return to the saved original avatar before applying another
+        -- preset. This prevents a Shirt/Pants replacement from becoming the
+        -- new baseline and makes preset switching reversible.
+        if #SkinObjects > 0 then
+            skinRestore()
+        else
+            skinClearLocal()
+        end
+        local loaded = 0
+        local failed = {}
+        for _, id in ipairs(assetIds) do
+            local found = skinLoadAsset(id)
+            local assetLoaded = false
+            for _, obj in ipairs(found) do
+                if skinEquipObject(obj, character, humanoid) then
+                    loaded += 1
+                    assetLoaded = true
+                    break
+                end
+            end
+            if not assetLoaded then table.insert(failed, tostring(id)) end
+        end
+        if loaded == 0 then
+            error('No wearable objects could be loaded. Failed IDs: ' .. table.concat(failed, ', '))
+        end
+        Window:Notify({Title='Skin Changer', Description=label .. ' • ' .. tostring(loaded) .. ' item(s) loaded locally.', Duration=4})
     end)
     if not ok then
-        -- Hard cleanup so a failed skin can never leave the original body hidden.
-        pcall(function() skinRestoreSnapshot() end)
+        skinRestore()
+        Window:Notify({Title='Skin Changer', Description='Failed: ' .. tostring(err), Duration=6})
     end
-    SkinApplyBusy = false
-    Window:Notify({Title='Skin Changer', Description=ok and (set.name .. ' applied locally.') or ('Set failed: ' .. tostring(err)), Duration=4})
+    SkinBusy = false
 end
 
-for _, set in ipairs(SakuraSkinSets) do
-    local preset = set
-    Window:AddButton({
-        Title = preset.name,
-        Description = 'New catalog set • LOCAL ONLY',
-        Tab = SkinChangerTab,
-        Callback = function() skinApplyItemSet(preset) end,
-    })
-end
-
-Window:AddSection({Name = 'Full Costume / Outfit IDs', Tab = SkinChangerTab})
-local CostumeOutfits = {
-    -- Roblox-created / public bundle outfit IDs. These are resolved through
-    -- GetHumanoidDescriptionFromOutfitIdAsync and rendered locally.
-    {799, 'Fishman Costume'},
-    {239, 'Classic Woman Costume'},
-    {238, 'Classic Man Costume'},
+-- Verified/current classic limited IDs from the supplied list. The Purple
+-- Sparkle ID 16950458 is also used as a fallback only; current catalog records
+-- identify 124221440903176 as a Purple Sparkle Time Fedora asset.
+local TopVisualItems = {
+    {name='Dominus Frigidus', ids={48545806}},
+    {name='Dominus Astra', ids={162067148}},
+    {name='Dominus Empyreus', ids={21070012}},
+    {name='Dominus Pittacium', ids={335080779}},
+    {name='Orange Sparkle Time Fedora', ids={48511}},
+    {name='Domino Crown', ids={17899978254}},
+    {name='Blackvalk', ids={124730194}},
+    {name='Red Sparkle Time Fedora', ids={72082328}},
+    {name='Purple Sparkle Time Fedora', ids={124221440903176,16950458}},
+    {name='Rainbow Shaggy', ids={64082730}},
 }
-for _, preset in ipairs(CostumeOutfits) do
-    local id, name = preset[1], preset[2]
+
+Window:AddSection({Name='TOP LIMITED • LOCAL VISUAL', Tab=SkinChangerTab})
+for _, item in ipairs(TopVisualItems) do
+    local preset=item
     Window:AddButton({
-        Title = name,
-        Description = 'Full costume • local visual renderer • ID ' .. tostring(id),
-        Tab = SkinChangerTab,
-        Callback = function() applyOutfitId(id, name) end,
+        Title='Wear • ' .. preset.name,
+        Description='Asset ID: ' .. tostring(preset.ids[1]),
+        Tab=SkinChangerTab,
+        Callback=function() skinApplyAssets(preset.ids, preset.name) end,
     })
 end
 
-local selectedOutfitId = ''
+Window:AddSection({Name='Sakura Presets', Tab=SkinChangerTab})
+local SakuraSkinSets = {
+    {name='Black Street / Neko', ids={93085894050661,133881421588973,70900202875823,78479406664358}},
+    {name='Pink Cat Ribbon', ids={113074223303024,107365932698068,96950229320019,123149577807585,78797181387509}},
+    {name='Angel Pink', ids={84100413956770,98604405382195,74630922086444,132413946223644}},
+    {name='Emo / Grunge Black', ids={78580171276956,70748193206569,70900202875823,91431619061146,78479406664358}},
+    {name='Shadow Ninja', ids={97134815283177,70900202875823,78479406664358}},
+}
+for _, preset in ipairs(SakuraSkinSets) do
+    local set=preset
+    Window:AddButton({
+        Title='Wear Set • ' .. set.name,
+        Description='Direct local catalog loader',
+        Tab=SkinChangerTab,
+        Callback=function() skinApplyAssets(set.ids,set.name) end,
+    })
+end
+
+Window:AddSection({Name='Custom Local Item', Tab=SkinChangerTab})
 Window:AddInput({
-    Title = 'Custom Outfit / UserOutfit ID',
-    Description = 'Paste an Outfit ID; this uses Roblox HumanoidDescription locally.',
-    Placeholder = 'Example: 480059254',
-    Tab = SkinChangerTab,
-    Callback = function(value) selectedOutfitId = tostring(value or '') end,
+    Title='Asset ID',
+    Description='Enter one Roblox catalog asset ID',
+    Placeholder='Example: 48545806',
+    Tab=SkinChangerTab,
+    Callback=function(v) SkinItemInput=tostring(v or '') end,
 })
 Window:AddButton({
-    Title = 'Apply Custom Outfit',
-    Description = 'Render the selected Outfit ID locally',
-    Tab = SkinChangerTab,
-    Callback = function()
-        local id=tonumber(selectedOutfitId)
-        if not id then
-            Window:Notify({Title='Skin Changer', Description='Enter a numeric Outfit ID first.', Duration=3})
-            return
-        end
-        applyOutfitId(id, 'Custom Outfit #' .. tostring(id))
+    Title='Wear Custom Asset',
+    Description='Load and attach the catalog asset locally',
+    Tab=SkinChangerTab,
+    Callback=function()
+        local id=tonumber(SkinItemInput)
+        if not id then Window:Notify({Title='Skin Changer',Description='Enter a numeric Asset ID.',Duration=3}); return end
+        skinApplyAssets({id},'Custom Asset #'..tostring(id))
     end,
 })
 
-Window:AddSection({Name = 'Skin Controls', Tab = SkinChangerTab})
+Window:AddSection({Name='Full Outfit / Avatar', Tab=SkinChangerTab})
+Window:AddInput({
+    Title='Outfit ID',
+    Description='User-created Outfit ID; resolved through HumanoidDescription',
+    Placeholder='Outfit ID',
+    Tab=SkinChangerTab,
+    Callback=function(v) SkinOutfitInput=tostring(v or '') end,
+})
 Window:AddButton({
-    Title = 'Restore Original Avatar',
-    Description = 'Restore the original character body after a local skin',
-    Tab = SkinChangerTab,
-    Callback = function()
-        local ok = skinRestoreSnapshot()
-        Window:Notify({Title='Skin Changer', Description=ok and 'Original avatar restored.' or 'Original avatar snapshot is unavailable.', Duration=3})
+    Title='Apply Outfit Locally',
+    Description='Build a local avatar model from the Outfit description',
+    Tab=SkinChangerTab,
+    Callback=function()
+        local id=tonumber(SkinOutfitInput)
+        if not id then Window:Notify({Title='Skin Changer',Description='Enter a numeric Outfit ID.',Duration=3}); return end
+        if SkinBusy then return end
+        local character=p and p.Character
+        local humanoid=character and character:FindFirstChildOfClass('Humanoid')
+        if not character or not humanoid then return end
+        SkinBusy=true
+        local ok,err=pcall(function()
+            skinSnapshot(character)
+            skinClearLocal()
+            local desc=Players:GetHumanoidDescriptionFromOutfitIdAsync(id)
+            local model=Players:CreateHumanoidModelFromDescriptionAsync(desc,humanoid.RigType)
+            local count=0
+            for _,obj in ipairs(model:GetChildren()) do
+                if obj:IsA('Accessory') or obj:IsA('Shirt') or obj:IsA('Pants') or obj:IsA('ShirtGraphic') then
+                    if skinEquipObject(obj,character,humanoid) then count+=1 end
+                end
+            end
+            pcall(function() model:Destroy() end)
+            if count==0 then error('Outfit contained no wearable catalog objects') end
+        end)
+        if ok then Window:Notify({Title='Skin Changer',Description='Outfit #'..tostring(id)..' applied locally.',Duration=4})
+        else skinRestore(); Window:Notify({Title='Skin Changer',Description='Outfit failed: '..tostring(err),Duration=6}) end
+        SkinBusy=false
+    end,
+})
+
+Window:AddButton({
+    Title='Restore Original Avatar',
+    Description='Remove all local skin items and restore the saved avatar',
+    Tab=SkinChangerTab,
+    Callback=function()
+        local ok=skinRestore()
+        Window:Notify({Title='Skin Changer',Description=ok and 'Original avatar restored.' or 'Nothing to restore.',Duration=3})
     end,
 })
 
@@ -7387,10 +7134,10 @@ task.spawn(function()
 
     local window=findMainWindow()
     if not window then return end
-    window.Size=UDim2.fromOffset(800,540)
+    window.Size=UDim2.fromOffset(700,500)
 
     local constraint=window:FindFirstChild('SakuraProjectSizeConstraint') or Instance.new('UISizeConstraint')
-    constraint.Name='SakuraProjectSizeConstraint'; constraint.MinSize=Vector2.new(600,420); constraint.MaxSize=Vector2.new(1250,820); constraint.Parent=window
+    constraint.Name='SakuraProjectSizeConstraint'; constraint.MinSize=Vector2.new(540,380); constraint.MaxSize=Vector2.new(1050,760); constraint.Parent=window
 
     -- White function headings and readable descriptions.
     for _,obj in ipairs(window:GetDescendants()) do
@@ -7428,7 +7175,7 @@ task.spawn(function()
         if obj:IsA('TextButton') then
             local t=string.lower(tostring(obj.Text or ''))
             if tabs[t] then
-                pcall(function() obj.Size=UDim2.new(obj.Size.X.Scale,obj.Size.X.Offset,0,44); obj.TextSize=19; obj.TextColor3=white end)
+                pcall(function() obj.Size=UDim2.new(obj.Size.X.Scale,obj.Size.X.Offset,0,52); obj.TextSize=20; obj.TextColor3=white end)
             end
         end
     end
@@ -7464,7 +7211,7 @@ task.spawn(function()
     -- Do not override the library's own window dragging/layout.
     -- Reparenting/clamping this frame can trap it inside the library container.
 
-    print('[Sakura Project] UI fixed: white headings, easy close, native launcher untouched, 800x540')
+    print('[Sakura Project] UI fixed: white headings, easy close, native launcher untouched, 700x500')
 end)
 
 -- ===== SAKURA PROJECT: DRAGGABLE NATIVE LAUNCHER =====
