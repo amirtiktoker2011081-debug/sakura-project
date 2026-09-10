@@ -81,9 +81,9 @@ if not success then
 end
 
 Window = Library:CreateWindow({
-    Title = 'Sakura Angel',
+    Title = 'Sakura Project',
     Theme = 'Dark',
-    Size = UDim2.fromOffset(900, 620),
+    Size = UDim2.fromOffset(1000, 700),
     Transparency = 0.1,
     Blurring = true,
     MinimizeKeybind = Enum.KeyCode.LeftAlt,
@@ -5459,7 +5459,7 @@ Window:AddSlider({
     end,
 })
 Window:Notify({
-    Title = 'Sakura Angel',
+    Title = 'Sakura Project',
     Description = 'Press Left Alt to Minimize and Open the tab!',
     Duration = 10,
 })
@@ -6710,428 +6710,479 @@ UserInputService.InputBegan:Connect(function(g)
 end)
 
 
--- ===== УЛУЧШЕННОЕ ПЕРЕТАСКИВАНИЕ ГЛАВНОГО МЕНЮ =====
--- Ищем именно окно с заголовком Sakura Angel, а не случайный Frame по размеру.
+-- ===== SAKURA PROJECT: STABLE CLICKGUI CONTROLLER =====
+-- Отдельная кнопка-контроллер живёт независимо от ClickGUI.
+-- Нажатие переключает реальное окно, а перетаскивание не ломает клик.
+-- Оригинальную кнопку библиотеки НЕ удаляем и НЕ подменяем.
 task.spawn(function()
-    task.wait(0.8)
+    local Players = game:GetService('Players')
+    local UIS = game:GetService('UserInputService')
+    local RunService = game:GetService('RunService')
+    local player = Players.LocalPlayer
+    local playerGui = player:WaitForChild('PlayerGui')
+    local CoreGui = game:GetService('CoreGui')
 
-    local UIS = game:GetService("UserInputService")
-    local Players = game:GetService("Players")
-    local CoreGui = game:GetService("CoreGui")
-    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+    local screen = Instance.new('ScreenGui')
+    screen.Name = 'SakuraProjectClickGUIController'
+    screen.ResetOnSpawn = false
+    screen.IgnoreGuiInset = true
+    screen.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    pcall(function() screen.DisplayOrder = 1000000 end)
+    screen.Parent = (gethui and gethui()) or CoreGui or playerGui
 
-    local function findMainWindow()
+    local button = Instance.new('TextButton')
+    button.Name = 'SakuraProjectToggle'
+    button.Size = UDim2.fromOffset(58, 58)
+    button.Position = UDim2.new(1, -82, 0.5, -29)
+    button.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+    button.BackgroundTransparency = 0.08
+    button.Text = 'SA'
+    button.TextColor3 = Color3.fromRGB(255, 105, 190)
+    button.TextSize = 21
+    button.Font = Enum.Font.GothamBold
+    button.AutoButtonColor = false
+    button.Active = true
+    button.Selectable = false
+    button.ZIndex = 1000000
+    button.Parent = screen
+
+    local corner = Instance.new('UICorner')
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = button
+
+    local stroke = Instance.new('UIStroke')
+    stroke.Color = Color3.fromRGB(255, 105, 190)
+    stroke.Thickness = 2
+    stroke.Transparency = 0.15
+    stroke.Parent = button
+
+    local scale = Instance.new('UIScale')
+    scale.Scale = 1
+    scale.Parent = button
+
+    local dragging = false
+    local moved = false
+    local dragStart = nil
+    local startPos = nil
+    local activeInput = nil
+    local DRAG_THRESHOLD = 8
+
+    local function savePos()
+        local x, y = button.AbsolutePosition.X, button.AbsolutePosition.Y
+        getgenv().SakuraProjectClickGUIPosition = {X = x, Y = y}
+        pcall(function()
+            if writefile then
+                writefile('SakuraProjectClickGUIPosition.txt', tostring(x)..'|'..tostring(y))
+            end
+        end)
+    end
+
+    local function clamp(x, y)
+        local camera = workspace.CurrentCamera
+        if not camera then return x, y end
+        local v = camera.ViewportSize
+        local sx, sy = button.AbsoluteSize.X, button.AbsoluteSize.Y
+        return math.clamp(x, 4, math.max(4, v.X - sx - 4)),
+               math.clamp(y, 4, math.max(4, v.Y - sy - 4))
+    end
+
+    local function restorePos()
+        local saved = getgenv().SakuraProjectClickGUIPosition
+        if saved and tonumber(saved.X) and tonumber(saved.Y) then
+            local x, y = clamp(tonumber(saved.X), tonumber(saved.Y))
+            button.Position = UDim2.fromOffset(x, y)
+            return
+        end
+        pcall(function()
+            if isfile and isfile('SakuraProjectClickGUIPosition.txt') and readfile then
+                local a,b = readfile('SakuraProjectClickGUIPosition.txt'):match('^([%-%.%d]+)|([%-%.%d]+)$')
+                if a and b then
+                    local x,y = clamp(tonumber(a), tonumber(b))
+                    button.Position = UDim2.fromOffset(x,y)
+                end
+            end
+        end)
+    end
+
+    local function findClickGuiWindow()
         local roots = {playerGui, CoreGui}
-        local best, bestScore = nil, -math.huge
+        local best = nil
+        local bestScore = -math.huge
 
         for _, root in ipairs(roots) do
             for _, obj in ipairs(root:GetDescendants()) do
-                if obj:IsA("Frame") then
-                    local score = 0
-                    local size = obj.AbsoluteSize
-
-                    if size.X >= 600 and size.Y >= 400 then score += 5 end
-                    if obj.Name:lower():find("window") then score += 3 end
-                    if obj.Name:lower():find("main") then score += 2 end
-
-                    for _, child in ipairs(obj:GetDescendants()) do
-                        if child:IsA("TextLabel") and child.Text == "Sakura Angel" then
-                            score += 20
-                            break
+                if obj:IsA('TextLabel') or obj:IsA('TextButton') then
+                    if obj.Text == 'Sakura Project' then
+                        local candidate = obj
+                        local depth = 0
+                        while candidate.Parent and depth < 12 do
+                            candidate = candidate.Parent
+                            depth += 1
+                            if candidate:IsA('Frame') or candidate:IsA('CanvasGroup') then
+                                local size = candidate.AbsoluteSize
+                                if size.X >= 500 and size.Y >= 300 then
+                                    local score = 100 - depth
+                                    if size.X >= 800 then score += 10 end
+                                    if size.Y >= 500 then score += 10 end
+                                    if score > bestScore then
+                                        bestScore = score
+                                        best = candidate
+                                    end
+                                    break
+                                end
+                            end
                         end
-                    end
-
-                    if score > bestScore then
-                        bestScore = score
-                        best = obj
                     end
                 end
             end
         end
-
         return best
     end
 
-    local windowFrame = findMainWindow()
-    if not windowFrame then
-        warn("[Sakura] Main window not found for UI enhancement")
-        return
+    local function setWindowVisible(window, visible)
+        if not window or not window.Parent then return false end
+        local ok = pcall(function() window.Visible = visible end)
+        if ok then return true end
+        return false
     end
 
-    -- Фиксируем новый удобный размер.
-    windowFrame.Size = UDim2.fromOffset(900, 620)
-
-    local constraint = windowFrame:FindFirstChild("SakuraSizeConstraint")
-    if not constraint then
-        constraint = Instance.new("UISizeConstraint")
-        constraint.Name = "SakuraSizeConstraint"
-        constraint.MinSize = Vector2.new(720, 480)
-        constraint.MaxSize = Vector2.new(1200, 820)
-        constraint.Parent = windowFrame
-    end
-
-    -- Перетаскивание только за верхнюю часть окна, чтобы кнопки/переключатели не мешали.
-    local dragHandle = nil
-    for _, obj in ipairs(windowFrame:GetDescendants()) do
-        if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text == "Sakura Angel" then
-            dragHandle = obj.Parent
-            break
+    local function toggleClickGui()
+        local window = findClickGuiWindow()
+        if not window then
+            warn('[Sakura Project] ClickGUI window not found yet')
+            return
         end
-    end
-    dragHandle = dragHandle or windowFrame
-
-    local dragging = false
-    local dragStart
-    local startPos
-    local dragInput
-
-    local function update(input)
-        local delta = input.Position - dragStart
-        windowFrame.Position = UDim2.new(
-            startPos.X.Scale,
-            startPos.X.Offset + delta.X,
-            startPos.Y.Scale,
-            startPos.Y.Offset + delta.Y
-        )
+        setWindowVisible(window, not window.Visible)
     end
 
-    dragHandle.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
+    restorePos()
+
+    button.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
+            moved = false
             dragStart = input.Position
-            startPos = windowFrame.Position
-
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
+            startPos = button.AbsolutePosition
+            activeInput = input
         end
     end)
 
-    dragHandle.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
+    button.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            activeInput = input
         end
     end)
 
     UIS.InputChanged:Connect(function(input)
-        if dragging and input == dragInput then
-            update(input)
+        if not dragging or not dragStart or not startPos then return end
+        local isMouse = input.UserInputType == Enum.UserInputType.MouseMovement
+        local isTouch = input.UserInputType == Enum.UserInputType.Touch
+        if not (isMouse or isTouch) then return end
+
+        local delta = input.Position - dragStart
+        if not moved and delta.Magnitude >= DRAG_THRESHOLD then
+            moved = true
+        end
+        if moved then
+            local x, y = clamp(startPos.X + delta.X, startPos.Y + delta.Y)
+            button.Position = UDim2.fromOffset(x, y)
         end
     end)
 
-    print("[Sakura] UI improved: 900x620 + draggable title bar + size limits")
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        if not dragging then return end
+        local wasMoved = moved
+        dragging = false
+        moved = false
+        dragStart = nil
+        startPos = nil
+        activeInput = nil
+        if wasMoved then
+            savePos()
+        else
+            toggleClickGui()
+        end
+    end)
+
+    -- Кнопка всегда поверх игры и восстанавливается после респавна.
+    player.CharacterAdded:Connect(function()
+        task.wait(0.2)
+        if screen.Parent == nil then
+            screen.Parent = (gethui and gethui()) or CoreGui or playerGui
+        end
+        restorePos()
+    end)
+
+    print('[Sakura Project] Stable ClickGUI controller: READY')
 end)
 
--- ===== SAKURA ANGEL: ПЕРЕТАСКИВАНИЕ ИМЕННО ЦЕНТРАЛЬНОЙ КНОПКИ CLICKGUI =====
--- ВАЖНО: новую кнопку не создаём и существующую логику ClickGUI не трогаем.
--- Библиотека создаёт кнопку открытия отдельно от самого окна, поэтому искать её
--- только внутри ScreenGui с Sakura Angel было ошибкой.
--- Здесь ищем среди ВСЕХ ScreenGui кнопку, которая находится около центра экрана.
--- Это соответствует кнопке с ножом на скриншоте.
+-- ===== SAKURA PROJECT: BIGGER GUI + BOLD TEXT + BIGGER CHECKBOXES =====
 task.spawn(function()
-    local UIS = game:GetService("UserInputService")
-    local Players = game:GetService("Players")
-    local CoreGui = game:GetService("CoreGui")
-    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+    task.wait(1.5)
+    local Players = game:GetService('Players')
+    local CoreGui = game:GetService('CoreGui')
+    local playerGui = Players.LocalPlayer:WaitForChild('PlayerGui')
 
-    local MOVE_THRESHOLD = 10
-    local EDGE_MARGIN = 6
-    local SAVE_FILE = "SakuraAngelClickGuiPosition.txt"
-    local boundButton = nil
-    local connections = {}
-
-    local function disconnectAll()
-        for _, c in ipairs(connections) do
-            pcall(function() c:Disconnect() end)
-        end
-        table.clear(connections)
-    end
-
-    local function isButton(obj)
-        return obj:IsA("ImageButton") or obj:IsA("TextButton")
-    end
-
-    local function scoreButton(obj)
-        if not isButton(obj) or not obj.Visible then return -math.huge end
-        local cam = workspace.CurrentCamera
-        if not cam then return -math.huge end
-
-        local vp = cam.ViewportSize
-        local pos = obj.AbsolutePosition
-        local size = obj.AbsoluteSize
-        if size.X < 35 or size.X > 130 or size.Y < 35 or size.Y > 130 then
-            return -math.huge
-        end
-        if math.abs(size.X - size.Y) > 30 then
-            return -math.huge
-        end
-
-        local centerX = pos.X + size.X * 0.5
-        local centerY = pos.Y + size.Y * 0.5
-        local dx = math.abs(centerX - vp.X * 0.5)
-        local dy = math.abs(centerY - vp.Y * 0.5)
-
-        -- Главный критерий: кнопка находится около горизонтального центра.
-        -- На скриншоте она находится в верхней центральной части, поэтому X
-        -- весит сильнее Y.
-        local score = 120 - math.min(dx, 1000) * 0.35 - math.min(dy, 700) * 0.10
-
-        if obj:IsA("ImageButton") then score += 18 end
-        if size.X >= 45 and size.X <= 100 then score += 15 end
-        if size.Y >= 45 and size.Y <= 100 then score += 15 end
-
-        local n = tostring(obj.Name):lower()
-        if n:find("toggle") then score += 35 end
-        if n:find("min") then score += 35 end
-        if n:find("menu") then score += 25 end
-        if n:find("click") then score += 30 end
-        if n:find("gui") then score += 25 end
-        if n:find("open") then score += 20 end
-        if n:find("button") then score += 5 end
-        if n:find("knife") then score += 50 end
-
-        -- Исключаем очевидные элементы стандартного Roblox topbar.
-        if pos.Y < 8 and size.Y <= 45 then score -= 100 end
-        if pos.X < 90 and pos.Y < 100 then score -= 60 end
-
-        -- Если у кнопки есть родитель с подходящим именем, это сильная подсказка.
-        local parent = obj.Parent
-        for _ = 1, 4 do
-            if not parent then break end
-            local pn = tostring(parent.Name):lower()
-            if pn:find("click") then score += 30 end
-            if pn:find("gui") then score += 10 end
-            if pn:find("menu") then score += 20 end
-            if pn:find("toggle") then score += 20 end
-            if pn:find("min") then score += 20 end
-            parent = parent.Parent
-        end
-
-        return score
-    end
-
-    local function findCenterClickGuiButton()
-        local best, bestScore = nil, -math.huge
-        local roots = {playerGui, CoreGui}
-
-        for _, root in ipairs(roots) do
-            for _, obj in ipairs(root:GetDescendants()) do
-                if isButton(obj) then
-                    local score = scoreButton(obj)
-                    if score > bestScore then
-                        bestScore = score
-                        best = obj
-                    end
-                end
-            end
-        end
-
-        -- Требуем достаточно высокий score, чтобы не взять случайную кнопку.
-        if bestScore < 55 then
-            return nil, bestScore
-        end
-        return best, bestScore
-    end
-
-    local function clampPosition(button, x, y)
-        local cam = workspace.CurrentCamera
-        if not cam then return x, y end
-        local vp = cam.ViewportSize
-        local size = button.AbsoluteSize
-        local maxX = math.max(EDGE_MARGIN, vp.X - size.X - EDGE_MARGIN)
-        local maxY = math.max(EDGE_MARGIN, vp.Y - size.Y - EDGE_MARGIN)
-        return math.clamp(x, EDGE_MARGIN, maxX), math.clamp(y, EDGE_MARGIN, maxY)
-    end
-
-    local function savePosition(button)
-        if not button or not button.Parent then return end
-        local x = button.Position.X.Offset
-        local y = button.Position.Y.Offset
-        pcall(function()
-            local env = (getgenv and getgenv()) or _G
-            env.SakuraAngelClickGuiPosition = {X = x, Y = y}
-        end)
-        pcall(function()
-            if writefile then
-                writefile(SAVE_FILE, tostring(x) .. "," .. tostring(y))
-            end
-        end)
-    end
-
-    local function loadPosition(button)
-        local x, y
-        pcall(function()
-            if isfile and isfile(SAVE_FILE) then
-                local raw = readfile(SAVE_FILE)
-                local a, b = raw:match("^([%-%.%d]+),([%-%.%d]+)$")
-                x, y = tonumber(a), tonumber(b)
-            end
-        end)
-        if not x or not y then
-            pcall(function()
-                local env = (getgenv and getgenv()) or _G
-                local pos = env.SakuraAngelClickGuiPosition
-                if pos then x, y = tonumber(pos.X), tonumber(pos.Y) end
-            end)
-        end
-        if x and y then
-            x, y = clampPosition(button, x, y)
-            button.Position = UDim2.fromOffset(x, y)
-        end
-    end
-
-    local function bindButton(button, score)
-        if not button or button == boundButton then return end
-        disconnectAll()
-        boundButton = button
-        loadPosition(button)
-
-        -- Не меняем Activated/MouseButton1Click и не заменяем callback.
-        -- Поэтому короткий тап продолжает выполнять оригинальное открытие ClickGUI.
-        pcall(function() button.Active = true end)
-
-        local pressed = false
-        local dragging = false
-        local startPointer
-        local startX, startY
-
-        table.insert(connections, button.InputBegan:Connect(function(input)
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1
-                and input.UserInputType ~= Enum.UserInputType.Touch then
-                return
-            end
-            pressed = true
-            dragging = false
-            startPointer = input.Position
-            startX = button.Position.X.Offset
-            startY = button.Position.Y.Offset
-        end))
-
-        table.insert(connections, UIS.InputChanged:Connect(function(input)
-            if not pressed or not startPointer then return end
-            if input.UserInputType ~= Enum.UserInputType.MouseMovement
-                and input.UserInputType ~= Enum.UserInputType.Touch then
-                return
-            end
-
-            local delta = input.Position - startPointer
-            if not dragging and delta.Magnitude >= MOVE_THRESHOLD then
-                dragging = true
-            end
-            if dragging and button.Parent then
-                local x, y = clampPosition(button, startX + delta.X, startY + delta.Y)
-                button.Position = UDim2.fromOffset(x, y)
-            end
-        end))
-
-        table.insert(connections, UIS.InputEnded:Connect(function(input)
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1
-                and input.UserInputType ~= Enum.UserInputType.Touch then
-                return
-            end
-            if not pressed then return end
-
-            if dragging then
-                savePosition(button)
-            end
-            pressed = false
-            dragging = false
-            startPointer = nil
-        end))
-
-        table.insert(connections, button.AncestryChanged:Connect(function(_, parent)
-            if not parent then
-                boundButton = nil
-                disconnectAll()
-            end
-        end))
-
-        print("[Sakura Angel] ClickGUI button found:", button:GetFullName(), "score:", math.floor(score))
-        print("[Sakura Angel] ClickGUI button is now draggable; original click behavior preserved")
-    end
-
-    -- Даём библиотеке время создать свою кнопку.
-    task.wait(1)
-
-    while true do
-        local button, score = findCenterClickGuiButton()
-        if button ~= boundButton then
-            if button then
-                bindButton(button, score)
-            else
-                disconnectAll()
-                boundButton = nil
-            end
-        end
-        task.wait(0.5)
-    end
-end)
-
--- ===== КОМПАКТНЫЕ TOGGLE-ЭЛЕМЕНТЫ =====
--- Само окно остаётся большим, а названия функций и чекбоксы делаются компактнее.
-task.spawn(function()
-    task.wait(1.2)
-    local Players = game:GetService("Players")
-    local CoreGui = game:GetService("CoreGui")
-    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
-
-    local function findMainWindow()
+    local function findWindow()
         local best, bestScore = nil, -math.huge
         for _, root in ipairs({playerGui, CoreGui}) do
             for _, obj in ipairs(root:GetDescendants()) do
-                if obj:IsA("Frame") and obj.Visible then
-                    local score = 0
-                    local size = obj.AbsoluteSize
-                    if size.X >= 600 and size.Y >= 400 then score += 5 end
-                    for _, child in ipairs(obj:GetDescendants()) do
-                        if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text == "Sakura Angel" then
-                            score += 20
-                            break
+                if obj:IsA('TextLabel') or obj:IsA('TextButton') then
+                    if obj.Text == 'Sakura Project' then
+                        local cur = obj
+                        for _ = 1, 10 do
+                            cur = cur.Parent
+                            if not cur then break end
+                            if (cur:IsA('Frame') or cur:IsA('CanvasGroup')) and cur.AbsoluteSize.X >= 500 and cur.AbsoluteSize.Y >= 300 then
+                                local score = cur.AbsoluteSize.X * cur.AbsoluteSize.Y
+                                if score > bestScore then best, bestScore = cur, score end
+                                break
+                            end
                         end
                     end
-                    if score > bestScore then bestScore, best = score, obj end
                 end
             end
         end
         return best
     end
 
-    local windowFrame = findMainWindow()
-    if not windowFrame then return end
+    local window = findWindow()
+    if not window then return end
+    window.Size = UDim2.fromOffset(1000, 700)
 
-    for _, row in ipairs(windowFrame:GetDescendants()) do
-        if row:IsA("Frame") then
-            local textLabel, check = nil, nil
-            for _, child in ipairs(row:GetChildren()) do
-                if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text ~= "" then
-                    textLabel = child
-                elseif child:IsA("ImageButton") or child:IsA("ImageLabel") then
-                    local p = child.Position
-                    if p.X.Scale >= 0.5 then check = child end
-                end
-            end
-            local h = row.AbsoluteSize.Y
-            if textLabel and check and h >= 25 and h <= 70 then
-                row.Size = UDim2.new(row.Size.X.Scale, row.Size.X.Offset, 0, 30)
-                textLabel.TextSize = math.clamp(math.floor(textLabel.TextSize * 0.78), 11, 14)
-                check.Size = UDim2.fromOffset(18, 18)
-                check.Position = UDim2.new(1, -24, 0.5, -9)
+    local constraint = window:FindFirstChild('SakuraProjectSizeConstraint')
+    if not constraint then
+        constraint = Instance.new('UISizeConstraint')
+        constraint.Name = 'SakuraProjectSizeConstraint'
+        constraint.MinSize = Vector2.new(820, 560)
+        constraint.MaxSize = Vector2.new(1400, 900)
+        constraint.Parent = window
+    end
+
+    for _, obj in ipairs(window:GetDescendants()) do
+        if obj:IsA('TextLabel') or obj:IsA('TextButton') or obj:IsA('TextBox') then
+            pcall(function() obj.Font = Enum.Font.GothamBold end)
+            if obj.TextSize > 0 then
+                obj.TextSize = math.clamp(math.floor(obj.TextSize * 1.10 + 0.5), 12, 25)
             end
         end
     end
-    print("[Sakura Angel] Compact function names + checkboxes applied")
+
+    -- Увеличиваем только компактные квадратные переключатели.
+    for _, obj in ipairs(window:GetDescendants()) do
+        if obj:IsA('ImageButton') or obj:IsA('ImageLabel') then
+            local s = obj.AbsoluteSize
+            if s.X >= 12 and s.X <= 45 and s.Y >= 12 and s.Y <= 45 and math.abs(s.X-s.Y) <= 8 then
+                pcall(function() obj.Size = UDim2.fromOffset(24, 24) end)
+            end
+        end
+    end
+
+    print('[Sakura Project] UI: 1000x700 + BOLD + larger toggles')
 end)
 
--- ===== ТЕКСТ GUI НЕ УВЕЛИЧИВАЕМ: КОМПАКТНЫЙ РЕЖИМ ВЫШЕ =====
+-- ===== SAKURA PROJECT: 10 LOCAL VISUAL FEATURES =====
+local SakuraVisualsSection = nil
+pcall(function()
+    SakuraVisualsSection = Window:AddSection({Name = 'Player Visuals', Tab = VisualsTab})
+end)
 
--- Pink "🌸 Menu" button removed: the library's own minimize button + LeftAlt keybind are enough.
+local SakuraVisualState = {
+    FullBright = false,
+    NoFog = false,
+    SelfHighlight = false,
+    RainbowSelf = false,
+    CameraFOV = false,
+    FPS = false,
+    Clock = false,
+    ColorBoost = false,
+    AmbientBoost = false,
+    LocalTransparency = false,
+}
+
+local LightingService = game:GetService('Lighting')
+local camera = workspace.CurrentCamera
+local oldLighting = {
+    Brightness = LightingService.Brightness,
+    FogStart = LightingService.FogStart,
+    FogEnd = LightingService.FogEnd,
+    Ambient = LightingService.Ambient,
+    OutdoorAmbient = LightingService.OutdoorAmbient,
+    ClockTime = LightingService.ClockTime,
+}
+local oldFOV = camera and camera.FieldOfView or 70
+local oldColorCorrection = nil
+local selfHighlight = nil
+local fpsGui = nil
+local rainbowConnection = nil
+
+local function ensureColorCorrection()
+    if oldColorCorrection and oldColorCorrection.Parent then return oldColorCorrection end
+    local cc = LightingService:FindFirstChild('SakuraProjectColorBoost')
+    if not cc then
+        cc = Instance.new('ColorCorrectionEffect')
+        cc.Name = 'SakuraProjectColorBoost'
+        cc.Parent = LightingService
+    end
+    oldColorCorrection = cc
+    return cc
+end
+
+local function updateSelfHighlight()
+    local character = p and p.Character
+    if not character then return end
+    if SakuraVisualState.SelfHighlight then
+        if not selfHighlight or not selfHighlight.Parent then
+            selfHighlight = Instance.new('Highlight')
+            selfHighlight.Name = 'SakuraProjectSelfHighlight'
+            selfHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            selfHighlight.FillTransparency = 0.65
+            selfHighlight.OutlineTransparency = 0
+            selfHighlight.Parent = character
+        end
+    elseif selfHighlight then
+        selfHighlight:Destroy()
+        selfHighlight = nil
+    end
+end
+
+local function updateRainbow()
+    if rainbowConnection then rainbowConnection:Disconnect(); rainbowConnection = nil end
+    if not SakuraVisualState.RainbowSelf then return end
+    rainbowConnection = RunService.RenderStepped:Connect(function()
+        local character = p and p.Character
+        if not character then return end
+        local hue = (os.clock() % 5) / 5
+        local c = Color3.fromHSV(hue, 0.85, 1)
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA('BasePart') then
+                pcall(function() part.Color = c end)
+            end
+        end
+    end)
+end
+
+local function updateFPS()
+    if SakuraVisualState.FPS then
+        if not fpsGui or not fpsGui.Parent then
+            fpsGui = Instance.new('ScreenGui')
+            fpsGui.Name = 'SakuraProjectFPS'
+            fpsGui.ResetOnSpawn = false
+            fpsGui.IgnoreGuiInset = true
+            fpsGui.Parent = (gethui and gethui()) or CoreGui
+            local label = Instance.new('TextLabel')
+            label.Name = 'FPS'
+            label.BackgroundTransparency = 1
+            label.Position = UDim2.fromOffset(12, 90)
+            label.Size = UDim2.fromOffset(180, 28)
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.Font = Enum.Font.GothamBold
+            label.TextSize = 18
+            label.TextColor3 = Color3.new(1,1,1)
+            label.TextStrokeTransparency = 0.4
+            label.Parent = fpsGui
+        end
+    elseif fpsGui then
+        fpsGui:Destroy()
+        fpsGui = nil
+    end
+end
+
+local function addVisualToggle(title, description, key, callback)
+    Window:AddToggle({
+        Title = title,
+        Description = description,
+        Default = false,
+        Tab = VisualsTab,
+        Callback = function(v)
+            SakuraVisualState[key] = v
+            pcall(callback, v)
+        end,
+    })
+end
+
+addVisualToggle('Fullbright', 'Bright local lighting for your client', 'FullBright', function(v)
+    if v then
+        LightingService.Brightness = 2
+        LightingService.Ambient = Color3.new(1,1,1)
+        LightingService.OutdoorAmbient = Color3.new(1,1,1)
+    else
+        LightingService.Brightness = oldLighting.Brightness
+        LightingService.Ambient = oldLighting.Ambient
+        LightingService.OutdoorAmbient = oldLighting.OutdoorAmbient
+    end
+end)
+
+addVisualToggle('No Fog', 'Remove local atmosphere fog', 'NoFog', function(v)
+    if v then LightingService.FogStart = 1e6; LightingService.FogEnd = 1e6
+    else LightingService.FogStart = oldLighting.FogStart; LightingService.FogEnd = oldLighting.FogEnd end
+end)
+
+addVisualToggle('Self Highlight', 'Highlight your own character locally', 'SelfHighlight', updateSelfHighlight)
+addVisualToggle('Rainbow Self', 'Cycle your local character colors', 'RainbowSelf', updateRainbow)
+addVisualToggle('Camera FOV 90', 'Use a wider local camera field of view', 'CameraFOV', function(v)
+    camera = workspace.CurrentCamera
+    if camera then camera.FieldOfView = v and 90 or oldFOV end
+end)
+addVisualToggle('FPS Counter', 'Show a small local FPS counter', 'FPS', updateFPS)
+addVisualToggle('Fixed Time', 'Lock local time to noon', 'Clock', function(v)
+    LightingService.ClockTime = v and 12 or oldLighting.ClockTime
+end)
+addVisualToggle('Color Boost', 'Increase local saturation and contrast', 'ColorBoost', function(v)
+    local cc = ensureColorCorrection()
+    cc.Saturation = v and 0.25 or 0
+    cc.Contrast = v and 0.15 or 0
+    cc.Brightness = v and 0.03 or 0
+end)
+addVisualToggle('Ambient Boost', 'Boost local ambient light', 'AmbientBoost', function(v)
+    LightingService.Ambient = v and Color3.fromRGB(180,180,180) or oldLighting.Ambient
+    LightingService.OutdoorAmbient = v and Color3.fromRGB(180,180,180) or oldLighting.OutdoorAmbient
+end)
+addVisualToggle('Local Transparency', 'Make your local character slightly transparent', 'LocalTransparency', function(v)
+    local character = p and p.Character
+    if character then
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA('BasePart') then
+                pcall(function() part.LocalTransparencyModifier = v and 0.25 or 0 end)
+            end
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function(dt)
+    if fpsGui and fpsGui.Parent then
+        local label = fpsGui:FindFirstChild('FPS')
+        if label then
+            local fps = math.floor(1 / math.max(dt, 1/240) + 0.5)
+            label.Text = 'FPS: ' .. tostring(fps)
+        end
+    end
+    if SakuraVisualState.Clock then
+        LightingService.ClockTime = 12
+    end
+    if SakuraVisualState.NoFog then
+        LightingService.FogStart = 1e6
+        LightingService.FogEnd = 1e6
+    end
+    if SakuraVisualState.LocalTransparency and p and p.Character then
+        for _, part in ipairs(p.Character:GetDescendants()) do
+            if part:IsA('BasePart') then
+                pcall(function() part.LocalTransparencyModifier = 0.25 end)
+            end
+        end
+    end
+end)
+
+p.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if SakuraVisualState.SelfHighlight then updateSelfHighlight() end
+end)
+
+-- Skin Changer is intentionally kept local-only; no server RemoteEvent is used here.
 task.wait(1)
 Window:Notify({
-    Title = 'Sakura Angel ✅',
-    Description = 'UI improved: larger window, draggable title bar and cleaner layout.',
+    Title = 'Sakura Project',
+    Description = 'Ready — draggable ClickGUI button, bigger UI, BOLD text and Player Visuals loaded.',
     Duration = 5,
 })
