@@ -6667,78 +6667,78 @@ task.spawn(function()
     print("[Sakura] UI improved: 900x620 + draggable title bar + size limits")
 end)
 
--- ===== ПЕРЕТАСКИВАНИЕ ШТАТНОЙ КНОПКИ ОТКРЫТИЯ GUI =====
--- ВАЖНО: это НЕ отдельная Sakura-кнопка. Ищем именно кнопку самой библиотеки
--- в том же ScreenGui, где находится заголовок "Sakura Project".
+-- ===== НАДЁЖНОЕ ПЕРЕТАСКИВАНИЕ КНОПКИ ОТКРЫТИЯ GUI =====
+-- Android + PC: короткое нажатие открывает меню, движение перемещает кнопку.
+-- Позиция сохраняется в _G и восстанавливается после пересоздания GUI.
 task.spawn(function()
-    task.wait(1.0)
-
     local UIS = game:GetService("UserInputService")
     local Players = game:GetService("Players")
     local CoreGui = game:GetService("CoreGui")
     local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 
-    local function isSmallRoundButton(obj)
+    _G.SakuraTogglePosition = _G.SakuraTogglePosition or nil
+    local boundButton = nil
+    local connections = {}
+    local MOVE_THRESHOLD = 10
+
+    local function disconnectAll()
+        for _, connection in ipairs(connections) do
+            pcall(function() connection:Disconnect() end)
+        end
+        table.clear(connections)
+    end
+
+    local function isCandidate(obj)
         if not (obj:IsA("ImageButton") or obj:IsA("TextButton")) then
             return false
         end
 
         local size = obj.AbsoluteSize
-        if size.X < 35 or size.X > 110 or size.Y < 35 or size.Y > 110 then
+        if size.X < 35 or size.X > 120 or size.Y < 35 or size.Y > 120 then
+            return false
+        end
+        if math.abs(size.X - size.Y) > 28 then
             return false
         end
 
-        if math.abs(size.X - size.Y) > 25 then
-            return false
-        end
-
-        return obj:FindFirstChildOfClass("UICorner") ~= nil
-            or obj:IsA("ImageButton")
+        return obj.Visible and obj.Active ~= false
     end
 
     local function findLibraryToggle()
         local roots = {playerGui, CoreGui}
 
+        -- Сначала ищем ScreenGui, в котором точно находится Sakura Project.
         for _, root in ipairs(roots) do
             for _, gui in ipairs(root:GetChildren()) do
                 if gui:IsA("ScreenGui") then
                     local hasSakuraTitle = false
-                    local titleObject = nil
-
                     for _, obj in ipairs(gui:GetDescendants()) do
-                        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
-                            if obj.Text == "Sakura Project" then
-                                hasSakuraTitle = true
-                                titleObject = obj
-                                break
-                            end
+                        if (obj:IsA("TextLabel") or obj:IsA("TextButton"))
+                            and obj.Text == "Sakura Project" then
+                            hasSakuraTitle = true
+                            break
                         end
                     end
 
                     if hasSakuraTitle then
-                        -- Сначала ищем кнопку с типичными именами библиотеки.
+                        local namedCandidate = nil
                         for _, obj in ipairs(gui:GetDescendants()) do
-                            if isSmallRoundButton(obj) then
-                                local n = obj.Name:lower()
-                                if n:find("toggle") or n:find("min") or n:find("menu") or n:find("open") then
-                                    return obj
+                            if isCandidate(obj) then
+                                local name = obj.Name:lower()
+                                if name:find("toggle") or name:find("min")
+                                    or name:find("menu") or name:find("open") then
+                                    namedCandidate = obj
+                                    break
                                 end
                             end
                         end
+                        if namedCandidate then
+                            return namedCandidate
+                        end
 
-                        -- Если имя другое — берём круглую ImageButton из ЭТОГО же ScreenGui.
                         for _, obj in ipairs(gui:GetDescendants()) do
-                            if isSmallRoundButton(obj) then
+                            if isCandidate(obj) then
                                 return obj
-                            end
-                        end
-
-                        -- Крайний вариант: кнопка рядом с заголовком.
-                        if titleObject and titleObject.Parent then
-                            for _, obj in ipairs(titleObject.Parent:GetDescendants()) do
-                                if isSmallRoundButton(obj) then
-                                    return obj
-                                end
                             end
                         end
                     end
@@ -6749,77 +6749,138 @@ task.spawn(function()
         return nil
     end
 
-    local toggleButton = findLibraryToggle()
-    if not toggleButton then
-        warn("[Sakura] Library open/close button not found")
-        return
-    end
-
-    local dragging = false
-    local moved = false
-    local dragInput
-    local dragStart
-    local startPos
-    local MOVE_THRESHOLD = 6
-
-    local function clampPosition(x, y)
+    local function clampPosition(button, x, y)
         local camera = workspace.CurrentCamera
-        if not camera then return x, y end
+        if not camera then
+            return x, y
+        end
 
         local viewport = camera.ViewportSize
-        local size = toggleButton.AbsoluteSize
+        local size = button.AbsoluteSize
+        local margin = 4
 
-        x = math.clamp(x, 0, math.max(0, viewport.X - size.X))
-        y = math.clamp(y, 0, math.max(0, viewport.Y - size.Y))
-        return x, y
+        return math.clamp(x, margin, math.max(margin, viewport.X - size.X - margin)),
+               math.clamp(y, margin, math.max(margin, viewport.Y - size.Y - margin))
     end
 
-    local function update(input)
-        local delta = input.Position - dragStart
-        if not moved and delta.Magnitude < MOVE_THRESHOLD then
+    local function restorePosition(button)
+        local saved = _G.SakuraTogglePosition
+        if not saved then
             return
         end
 
-        moved = true
-        local x = startPos.X.Offset + delta.X
-        local y = startPos.Y.Offset + delta.Y
-        x, y = clampPosition(x, y)
-
-        toggleButton.Position = UDim2.new(startPos.X.Scale, x, startPos.Y.Scale, y)
-    end
-
-    toggleButton.InputBegan:Connect(function(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1
-            and input.UserInputType ~= Enum.UserInputType.Touch then
-            return
-        end
-
-        dragging = true
-        moved = false
-        dragStart = input.Position
-        startPos = toggleButton.Position
-
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
+        task.defer(function()
+            if not button or not button.Parent then
+                return
             end
+
+            local x, y = clampPosition(button, saved.X, saved.Y)
+            button.Position = UDim2.fromOffset(x, y)
+            _G.SakuraTogglePosition = {X = x, Y = y}
         end)
-    end)
+    end
 
-    toggleButton.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
+    local function bindButton(button)
+        if not button or button == boundButton then
+            return
         end
-    end)
 
-    UIS.InputChanged:Connect(function(input)
-        if dragging and input == dragInput then
-            update(input)
+        disconnectAll()
+        boundButton = button
+
+        -- Критично для TouchInput на Android.
+        button.Active = true
+        if button:IsA("GuiButton") then
+            button.Selectable = false
         end
-    end)
 
-    print("[Sakura] Library open/close button is now draggable: " .. toggleButton.Name)
+        restorePosition(button)
+
+        local dragging = false
+        local moved = false
+        local dragStart = nil
+        local startX = 0
+        local startY = 0
+        local activeInput = nil
+
+        local function beginDrag(input)
+            dragging = true
+            moved = false
+            activeInput = input
+            dragStart = input.Position
+            startX = button.Position.X.Offset
+            startY = button.Position.Y.Offset
+        end
+
+        local function updateDrag(input)
+            if not dragging or input ~= activeInput or not dragStart then
+                return
+            end
+
+            local delta = input.Position - dragStart
+            if delta.Magnitude >= MOVE_THRESHOLD then
+                moved = true
+            end
+
+            if moved then
+                local x, y = clampPosition(button, startX + delta.X, startY + delta.Y)
+                button.Position = UDim2.fromOffset(x, y)
+                _G.SakuraTogglePosition = {X = x, Y = y}
+            end
+        end
+
+        table.insert(connections, button.InputBegan:Connect(function(input)
+            local inputType = input.UserInputType
+            if inputType == Enum.UserInputType.Touch
+                or inputType == Enum.UserInputType.MouseButton1 then
+                beginDrag(input)
+            end
+        end))
+
+        table.insert(connections, button.InputChanged:Connect(function(input)
+            local inputType = input.UserInputType
+            if inputType == Enum.UserInputType.Touch
+                or inputType == Enum.UserInputType.MouseMovement then
+                activeInput = input
+            end
+        end))
+
+        table.insert(connections, UIS.InputChanged:Connect(function(input)
+            updateDrag(input)
+        end))
+
+        table.insert(connections, UIS.InputEnded:Connect(function(input)
+            if not dragging then
+                return
+            end
+
+            if input == activeInput
+                or input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+                activeInput = nil
+                dragStart = nil
+            end
+        end))
+
+        -- Если библиотека пересоздала кнопку, менеджер ниже перепривяжется.
+        table.insert(connections, button.AncestryChanged:Connect(function(_, parent)
+            if not parent then
+                boundButton = nil
+                disconnectAll()
+            end
+        end))
+
+        print("[Sakura] Toggle drag enabled: Android Touch + PC Mouse")
+    end
+
+    while true do
+        local button = findLibraryToggle()
+        if button ~= boundButton then
+            bindButton(button)
+        end
+        task.wait(0.5)
+    end
 end)
 
 -- ===== УВЕЛИЧЕНИЕ ЧИТАЕМОСТИ ТЕКСТА GUI =====
