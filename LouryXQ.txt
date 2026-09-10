@@ -6826,70 +6826,191 @@ task.spawn(function()
     print("[Sakura] UI improved: 900x620 + draggable title bar + size limits")
 end)
 
--- ===== SAKURA ANGEL: ПЛАВАЮЩАЯ КНОПКА ОТКРЫТИЯ МЕНЮ =====
--- Одна кнопка SA: короткий клик открывает/скрывает ИМЕННО основное меню,
--- удержание и движение мыши/тача переносит кнопку. Позиция сохраняется.
+-- ===== SAKURA ANGEL: СТИЛЬ SA НА НАТИВНОЙ КНОПКЕ МЕНЮ =====
+-- Не создаём вторую плавающую кнопку.
+-- Берём именно существующую кнопку библиотеки, которая уже открывает/скрывает GUI,
+-- меняем только её внешний вид на SA и добавляем перетаскивание с сохранением позиции.
 task.spawn(function()
     local UIS = game:GetService("UserInputService")
     local Players = game:GetService("Players")
     local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
-    local GUI_NAME = "SakuraAngelFloatingButton"
+    local CoreGui = game:GetService("CoreGui")
     local SAVE_FILE = "SakuraAngelTogglePosition.txt"
     local EDGE = 8
-    local THRESHOLD = 7
+    local DRAG_THRESHOLD = 7
 
-    local old = playerGui:FindFirstChild(GUI_NAME)
-    if old then old:Destroy() end
+    -- Удаляем старую SA-кнопку из предыдущих версий, если скрипт был запущен повторно.
+    pcall(function()
+        local old = playerGui:FindFirstChild("SakuraAngelFloatingButton")
+        if old then old:Destroy() end
+    end)
 
-    local sg = Instance.new("ScreenGui")
-    sg.Name = GUI_NAME
-    sg.ResetOnSpawn = false
-    sg.IgnoreGuiInset = true
-    sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
-    sg.DisplayOrder = 10000
-    sg.Parent = playerGui
+    local function isGuiButton(obj)
+        return obj:IsA("ImageButton") or obj:IsA("TextButton")
+    end
 
-    local button = Instance.new("TextButton")
-    button.Name = "MenuButton"
-    button.Size = UDim2.fromOffset(48, 48)
-    button.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    button.BackgroundTransparency = 0.06
-    button.BorderSizePixel = 0
-    button.Text = "SA"
-    button.TextColor3 = Color3.fromRGB(255, 145, 205)
-    button.TextSize = 15
-    button.Font = Enum.Font.GothamBold
-    button.AutoButtonColor = false
-    button.Active = true
-    button.ZIndex = 10001
-    button.Parent = sg
+    local function hasSakuraWindow(root)
+        if not root then return false end
+        for _, obj in ipairs(root:GetDescendants()) do
+            if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and tostring(obj.Text) == "Sakura Angel" then
+                return true
+            end
+        end
+        return false
+    end
 
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = button
+    -- Ищем именно кнопку, которая принадлежит ScreenGui библиотеки.
+    -- Важное отличие от старой версии: мы НЕ создаём новую ScreenGui/кнопку.
+    local function findNativeMenuButton()
+        local best, bestScore = nil, -math.huge
 
-    local stroke = Instance.new("UIStroke")
-    stroke.Thickness = 1.25
-    stroke.Transparency = 0.2
-    stroke.Color = Color3.fromRGB(255, 110, 185)
-    stroke.Parent = button
+        local roots = {}
+        for _, root in ipairs({playerGui, CoreGui}) do
+            for _, child in ipairs(root:GetChildren()) do
+                if child:IsA("ScreenGui") and hasSakuraWindow(child) then
+                    table.insert(roots, child)
+                end
+            end
+        end
+
+        for _, root in ipairs(roots) do
+            for _, obj in ipairs(root:GetDescendants()) do
+                if isGuiButton(obj) and obj.Visible then
+                    -- Кнопка меню находится ВНЕ самого большого окна.
+                    local insideWindow = false
+                    local ancestor = obj.Parent
+                    while ancestor and ancestor ~= root do
+                        if ancestor:IsA("Frame") then
+                            local sz = ancestor.AbsoluteSize
+                            if sz.X >= 600 and sz.Y >= 400 then
+                                insideWindow = true
+                                break
+                            end
+                        end
+                        ancestor = ancestor.Parent
+                    end
+
+                    if not insideWindow then
+                        local sz = obj.AbsoluteSize
+                        local pos = obj.AbsolutePosition
+                        local score = 0
+
+                        -- Характерный размер кнопки из скрина: небольшая квадратная кнопка.
+                        if sz.X >= 45 and sz.X <= 110 and sz.Y >= 45 and sz.Y <= 110 then score += 35 end
+                        if math.abs(sz.X - sz.Y) <= 15 then score += 20 end
+                        if pos.Y <= 180 then score += 12 end
+                        if pos.X > 200 then score += 5 end
+
+                        local name = tostring(obj.Name):lower()
+                        if name:find("min") or name:find("toggle") or name:find("menu") then score += 30 end
+                        if name:find("button") or name:find("icon") then score += 8 end
+
+                        if obj:IsA("ImageButton") then
+                            if obj.Image and obj.Image ~= "" then score += 10 end
+                        elseif obj:IsA("TextButton") then
+                            if tostring(obj.Text) ~= "" then score += 4 end
+                        end
+
+                        if score > bestScore then
+                            bestScore = score
+                            best = obj
+                        end
+                    end
+                end
+            end
+        end
+
+        return best
+    end
+
+    local button
+    for _ = 1, 30 do
+        button = findNativeMenuButton()
+        if button then break end
+        task.wait(0.5)
+    end
+
+    if not button then
+        warn("[Sakura Angel] Native menu button was not found; no extra button was created.")
+        return
+    end
+
+    -- Сохраняем исходную иконку только в памяти, но визуально превращаем кнопку в SA.
+    pcall(function()
+        if button:IsA("ImageButton") then
+            button.ImageTransparency = 1
+            button.BackgroundTransparency = 0
+        else
+            button.Text = ""
+            button.BackgroundTransparency = 0
+        end
+        button.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+        button.AutoButtonColor = false
+        button.ZIndex = math.max(button.ZIndex, 1000)
+
+        local corner = button:FindFirstChild("SakuraAngelCorner") or Instance.new("UICorner")
+        corner.Name = "SakuraAngelCorner"
+        corner.CornerRadius = UDim.new(1, 0)
+        corner.Parent = button
+
+        local stroke = button:FindFirstChild("SakuraAngelStroke") or Instance.new("UIStroke")
+        stroke.Name = "SakuraAngelStroke"
+        stroke.Thickness = 1.25
+        stroke.Transparency = 0.2
+        stroke.Color = Color3.fromRGB(255, 110, 185)
+        stroke.Parent = button
+
+        local label = button:FindFirstChild("SakuraAngelText")
+        if not label then
+            label = Instance.new("TextLabel")
+            label.Name = "SakuraAngelText"
+            label.BackgroundTransparency = 1
+            label.Size = UDim2.fromScale(1, 1)
+            label.Position = UDim2.fromScale(0, 0)
+            label.Text = "SA"
+            label.TextColor3 = Color3.fromRGB(255, 110, 185)
+            label.TextSize = 18
+            label.Font = Enum.Font.GothamBold
+            label.TextXAlignment = Enum.TextXAlignment.Center
+            label.TextYAlignment = Enum.TextYAlignment.Center
+            label.ZIndex = button.ZIndex + 1
+            label.Parent = button
+        else
+            label.Text = "SA"
+            label.TextColor3 = Color3.fromRGB(255, 110, 185)
+            label.Visible = true
+        end
+
+        -- Убираем старую иконку ножа/картинку внутри этой же кнопки.
+        -- Сам объект-кнопка остаётся тем же, меняется только его визуал.
+        for _, child in ipairs(button:GetDescendants()) do
+            if child:IsA("ImageLabel") or child:IsA("ImageButton") then
+                if child ~= button then
+                    child.Visible = false
+                end
+            end
+        end
+    end)
 
     local function clamp(x, y)
         local camera = workspace.CurrentCamera
         if not camera then return x, y end
         local vp = camera.ViewportSize
-        return math.clamp(x, EDGE, math.max(EDGE, vp.X - 48 - EDGE)),
-               math.clamp(y, EDGE, math.max(EDGE, vp.Y - 48 - EDGE))
+        local w, h = button.AbsoluteSize.X, button.AbsoluteSize.Y
+        return math.clamp(x, EDGE, math.max(EDGE, vp.X - w - EDGE)),
+               math.clamp(y, EDGE, math.max(EDGE, vp.Y - h - EDGE))
     end
 
     local function savePosition()
         local x, y = button.Position.X.Offset, button.Position.Y.Offset
         pcall(function()
             local env = (getgenv and getgenv()) or _G
-            env.SakuraAngelTogglePosition = { X = x, Y = y }
+            env.SakuraAngelTogglePosition = {X = x, Y = y}
         end)
         pcall(function()
-            if writefile then writefile(SAVE_FILE, string.format("%s,%s", x, y)) end
+            if writefile then
+                writefile(SAVE_FILE, string.format("%s,%s", x, y))
+            end
         end)
     end
 
@@ -6912,168 +7033,65 @@ task.spawn(function()
         if x and y then
             x, y = clamp(x, y)
             button.Position = UDim2.fromOffset(x, y)
-            return
-        end
-        local camera = workspace.CurrentCamera
-        if camera then
-            local vp = camera.ViewportSize
-            button.Position = UDim2.fromOffset(math.max(EDGE, vp.X - 64), math.max(EDGE, vp.Y * 0.5 - 24))
-        else
-            button.Position = UDim2.fromOffset(EDGE, EDGE)
         end
     end
 
     loadPosition()
 
-    -- Наиболее надёжный вариант: попросить саму UI-библиотеку переключить окно.
-    -- Если API библиотеки отличается, ниже есть резервный поиск ScreenGui/Frame.
-    local function libraryToggle()
-        local ok = false
-        pcall(function()
-            if Library and type(Library.Toggle) == "function" then
-                Library:Toggle()
-                ok = true
-            end
-        end)
-        if not ok then
-            pcall(function()
-                if Window and type(Window.Toggle) == "function" then
-                    Window:Toggle()
-                    ok = true
-                end
-            end)
-        end
-        return ok
-    end
-
-    local function scoreGui(root)
-        local score = 0
-        for _, obj in ipairs(root:GetDescendants()) do
-            if obj:IsA("Frame") then
-                local size = obj.AbsoluteSize
-                if size.X >= 650 and size.Y >= 400 then score += 8 end
-            elseif obj:IsA("TextLabel") or obj:IsA("TextButton") then
-                local text = tostring(obj.Text or "")
-                if text == "Sakura Angel" then score += 50 end
-                if text == "Sakura Angel" then score += 1 end -- legacy fallback only
-            end
-        end
-        return score
-    end
-
-    local function findMainScreenGui()
-        local candidates = {}
-        for _, root in ipairs({playerGui, game:GetService("CoreGui")}) do
-            for _, child in ipairs(root:GetChildren()) do
-                if child:IsA("ScreenGui") and child ~= sg then
-                    local score = scoreGui(child)
-                    if score > 0 then
-                        table.insert(candidates, {gui = child, score = score})
-                    end
-                end
-            end
-        end
-        table.sort(candidates, function(a,b) return a.score > b.score end)
-        return candidates[1] and candidates[1].gui or nil
-    end
-
-    local function findMainFrame()
-        local best, bestScore = nil, -math.huge
-        for _, root in ipairs({playerGui, game:GetService("CoreGui")}) do
-            for _, obj in ipairs(root:GetDescendants()) do
-                if obj:IsA("Frame") then
-                    local size = obj.AbsoluteSize
-                    local score = (size.X >= 650 and size.Y >= 400) and 8 or 0
-                    for _, child in ipairs(obj:GetDescendants()) do
-                        if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text == "Sakura Angel" then
-                            score += 50
-                            break
-                        end
-                    end
-                    if score > bestScore then bestScore, best = score, obj end
-                end
-            end
-        end
-        return best
-    end
-
-    local function toggleMainMenu()
-        if libraryToggle() then return end
-
-        local gui = findMainScreenGui()
-        if gui then
-            gui.Enabled = not gui.Enabled
-            return
-        end
-
-        local frame = findMainFrame()
-        if frame then
-            frame.Visible = not frame.Visible
-        end
-    end
-
-    local down = false
+    -- Делаем саму НАТИВНУЮ кнопку перетаскиваемой.
+    -- Её существующий callback библиотеки остаётся на месте, поэтому короткий клик
+    -- продолжает открывать именно то меню, которое открывал нож на скрине.
+    local pressed = false
     local dragging = false
-    local startPos, startPointer
-
-    local function begin(pointer)
-        down = true
-        dragging = false
-        startPointer = pointer
-        startPos = Vector2.new(button.Position.X.Offset, button.Position.Y.Offset)
-    end
-
-    local function move(pointer)
-        if not down or not startPointer then return end
-        local delta = pointer - startPointer
-        if not dragging and delta.Magnitude >= THRESHOLD then dragging = true end
-        if dragging then
-            local x, y = clamp(startPos.X + delta.X, startPos.Y + delta.Y)
-            button.Position = UDim2.fromOffset(x, y)
-        end
-    end
-
-    local function finish()
-        if not down then return end
-        local moved = dragging
-        down, dragging, startPointer = false, false, nil
-        if moved then savePosition() else toggleMainMenu() end
-    end
+    local startPointer
+    local startPos
 
     button.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            begin(input.Position)
-        elseif input.UserInputType == Enum.UserInputType.Touch then
-            begin(input.Position)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            pressed = true
+            dragging = false
+            startPointer = input.Position
+            startPos = Vector2.new(button.Position.X.Offset, button.Position.Y.Offset)
         end
     end)
 
     UIS.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then
-            move(input.Position)
-        elseif input.UserInputType == Enum.UserInputType.Touch then
-            move(input.Position)
+        if not pressed or not startPointer then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+
+        local delta = input.Position - startPointer
+        if not dragging and delta.Magnitude >= DRAG_THRESHOLD then
+            dragging = true
+        end
+
+        if dragging then
+            local x, y = clamp(startPos.X + delta.X, startPos.Y + delta.Y)
+            button.Position = UDim2.fromOffset(x, y)
         end
     end)
 
     UIS.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            finish()
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        if not pressed then return end
+
+        local wasDragging = dragging
+        pressed = false
+        dragging = false
+        startPointer = nil
+
+        if wasDragging then
+            savePosition()
         end
     end)
 
-    task.spawn(function()
-        while button.Parent do
-            task.wait(1)
-            local x, y = clamp(button.Position.X.Offset, button.Position.Y.Offset)
-            if x ~= button.Position.X.Offset or y ~= button.Position.Y.Offset then
-                button.Position = UDim2.fromOffset(x, y)
-                savePosition()
-            end
-        end
-    end)
-
-    print("[Sakura Angel] SA menu button ready")
+    print("[Sakura Angel] Existing menu button converted to SA; no second button created.")
 end)
 
 -- ===== КОМПАКТНЫЕ TOGGLE-ЭЛЕМЕНТЫ =====
