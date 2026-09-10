@@ -1,8 +1,8 @@
-if _G.Heartagram then
+if _G.SakuraAngelLoaded then
     return
 end
 
-_G.Heartagram = true
+_G.SakuraAngelLoaded = true
 p = game.Players.LocalPlayer
 ps = game:GetService('Players')
 RunService = game:GetService('RunService')
@@ -838,164 +838,6 @@ UIElements.autoGrabGunToggle = Window:AddToggle({
         isagbEnabled = a
     end,
 })
--- ===== SAKURA ANGEL: LOCAL SKIN CHANGER =====
--- Только клиентский визуальный слой: создаёт локальные Clothing/Accessory объекты
--- в персонаже и не вызывает RemoteEvent для смены внешности.
-SkinChangerTab = Window:AddTab({
-    Title = 'Skin Changer',
-    Icon = 'rbxassetid://11963373994',
-})
-
-Window:AddSection({
-    Name = 'Local Skins',
-    Tab = SkinChangerTab,
-})
-
-local SakuraLocalSkinApplied = false
-local SakuraLocalSkinFolderName = 'SakuraAngel_LocalSkin'
-
-local function getCharacterParts()
-    local character = p and p.Character
-    if not character or not character.Parent then
-        return nil, nil
-    end
-    local humanoid = character:FindFirstChildOfClass('Humanoid')
-    if not humanoid then
-        return nil, nil
-    end
-    return character, humanoid
-end
-
-local function removeLocalSkin(character)
-    local oldFolder = character and character:FindFirstChild(SakuraLocalSkinFolderName)
-    if oldFolder then
-        oldFolder:Destroy()
-    end
-    for _, obj in ipairs(character:GetChildren()) do
-        if obj:IsA('Shirt') and obj:GetAttribute('SakuraAngelLocalSkin') then
-            obj:Destroy()
-        elseif obj:IsA('Pants') and obj:GetAttribute('SakuraAngelLocalSkin') then
-            obj:Destroy()
-        elseif obj:IsA('Accessory') and obj:GetAttribute('SakuraAngelLocalSkin') then
-            obj:Destroy()
-        end
-    end
-end
-
-local function addLocalAccessory(character, assetId, folder)
-    local ok, objects = pcall(function()
-        return game:GetObjects('rbxassetid://' .. tostring(assetId))
-    end)
-    if not ok or type(objects) ~= 'table' then
-        return false
-    end
-
-    local added = false
-    for _, obj in ipairs(objects) do
-        if obj:IsA('Accessory') then
-            obj:SetAttribute('SakuraAngelLocalSkin', true)
-            obj.Parent = character
-            local humanoid = character:FindFirstChildOfClass('Humanoid')
-            if humanoid then
-                pcall(function()
-                    humanoid:AddAccessory(obj)
-                end)
-            end
-            added = true
-        else
-            obj:Destroy()
-        end
-    end
-    return added
-end
-
-local function applyPinkAngelLocalSkin()
-    local character = getCharacterParts()
-    if not character then
-        return false, 'Character/Humanoid not found'
-    end
-
-    removeLocalSkin(character)
-
-    local folder = Instance.new('Folder')
-    folder.Name = SakuraLocalSkinFolderName
-    folder.Parent = character
-
-    -- Classic pink angel clothing. These are local Shirt/Pants instances.
-    local shirt = Instance.new('Shirt')
-    shirt.Name = 'SakuraAngel_LocalShirt'
-    shirt.ShirtTemplate = 'rbxassetid://5529087338'
-    shirt:SetAttribute('SakuraAngelLocalSkin', true)
-    shirt.Parent = character
-
-    local pants = Instance.new('Pants')
-    pants.Name = 'SakuraAngel_LocalPants'
-    pants.PantsTemplate = 'rbxassetid://5529088945'
-    pants:SetAttribute('SakuraAngelLocalSkin', true)
-    pants.Parent = character
-
-    -- Popular pink angel wings. Failure here does not break the clothing.
-    addLocalAccessory(character, 8651335862, folder)
-
-    SakuraLocalSkinApplied = true
-    return true
-end
-
-local skinButton = Window:AddButton({
-    Title = 'Apply Pink Angel',
-    Description = 'Local visual skin — only on your client',
-    Tab = SkinChangerTab,
-    Callback = function()
-        local ok, err = applyPinkAngelLocalSkin()
-        if ok then
-            Window:Notify({
-                Title = 'Skin Changer',
-                Description = 'Pink Angel applied locally.',
-                Duration = 3,
-            })
-            -- После включения кнопка исчезает, как ты просил.
-            pcall(function()
-                if skinButton and skinButton.SetVisible then
-                    skinButton:SetVisible(false)
-                elseif skinButton and skinButton.Visible ~= nil then
-                    skinButton.Visible = false
-                end
-            end)
-        else
-            Window:Notify({
-                Title = 'Skin Changer',
-                Description = tostring(err or 'Failed to apply skin.'),
-                Duration = 3,
-            })
-        end
-    end,
-})
-
-Window:AddButton({
-    Title = 'Remove Local Skin',
-    Description = 'Restores the character by removing Sakura local items',
-    Tab = SkinChangerTab,
-    Callback = function()
-        local character = p and p.Character
-        if character then
-            removeLocalSkin(character)
-            SakuraLocalSkinApplied = false
-            pcall(function()
-                if skinButton and skinButton.SetVisible then
-                    skinButton:SetVisible(true)
-                elseif skinButton and skinButton.Visible ~= nil then
-                    skinButton.Visible = true
-                end
-            end)
-            Window:Notify({
-                Title = 'Skin Changer',
-                Description = 'Local skin removed.',
-                Duration = 2,
-            })
-        end
-    end,
-})
-
 LocalPlayerTab = Window:AddTab({
     Title = 'LocalPlayer',
     Icon = 'rbxassetid://11963373994',
@@ -4825,6 +4667,165 @@ MiscTab = Window:AddTab({
     Title = 'Misc',
     Icon = 'rbxassetid://11963373994',
 })
+
+-- ===== SAKURA ANGEL: LOCAL SKIN CHANGER =====
+-- Только клиентский визуальный слой: создаёт локальные Clothing/Accessory объекты
+-- в персонаже и не вызывает RemoteEvent для смены внешности.
+SkinChangerTab = Window:AddTab({
+    Title = 'Skin Changer',
+    Icon = 'rbxassetid://11963373994',
+})
+
+Window:AddSection({
+    Name = 'Local Skins',
+    Tab = SkinChangerTab,
+})
+
+local SakuraLocalSkinApplied = false
+local SakuraLocalSkinFolderName = 'SakuraAngel_LocalSkin'
+
+local function getCharacterParts()
+    local character = p and p.Character
+    if not character or not character.Parent then
+        return nil, nil
+    end
+    local humanoid = character:FindFirstChildOfClass('Humanoid')
+    if not humanoid then
+        return nil, nil
+    end
+    return character, humanoid
+end
+
+local function removeLocalSkin(character)
+    local oldFolder = character and character:FindFirstChild(SakuraLocalSkinFolderName)
+    if oldFolder then
+        oldFolder:Destroy()
+    end
+    for _, obj in ipairs(character:GetChildren()) do
+        if obj:IsA('Shirt') and obj:GetAttribute('SakuraAngelLocalSkin') then
+            obj:Destroy()
+        elseif obj:IsA('Pants') and obj:GetAttribute('SakuraAngelLocalSkin') then
+            obj:Destroy()
+        elseif obj:IsA('Accessory') and obj:GetAttribute('SakuraAngelLocalSkin') then
+            obj:Destroy()
+        end
+    end
+end
+
+local function addLocalAccessory(character, assetId, folder)
+    local ok, objects = pcall(function()
+        return game:GetObjects('rbxassetid://' .. tostring(assetId))
+    end)
+    if not ok or type(objects) ~= 'table' then
+        return false
+    end
+
+    local added = false
+    for _, obj in ipairs(objects) do
+        if obj:IsA('Accessory') then
+            obj:SetAttribute('SakuraAngelLocalSkin', true)
+            obj.Parent = character
+            local humanoid = character:FindFirstChildOfClass('Humanoid')
+            if humanoid then
+                pcall(function()
+                    humanoid:AddAccessory(obj)
+                end)
+            end
+            added = true
+        else
+            obj:Destroy()
+        end
+    end
+    return added
+end
+
+local function applyPinkAngelLocalSkin()
+    local character = getCharacterParts()
+    if not character then
+        return false, 'Character/Humanoid not found'
+    end
+
+    removeLocalSkin(character)
+
+    local folder = Instance.new('Folder')
+    folder.Name = SakuraLocalSkinFolderName
+    folder.Parent = character
+
+    -- Classic pink angel clothing. These are local Shirt/Pants instances.
+    local shirt = Instance.new('Shirt')
+    shirt.Name = 'SakuraAngel_LocalShirt'
+    shirt.ShirtTemplate = 'rbxassetid://5529087338'
+    shirt:SetAttribute('SakuraAngelLocalSkin', true)
+    shirt.Parent = character
+
+    local pants = Instance.new('Pants')
+    pants.Name = 'SakuraAngel_LocalPants'
+    pants.PantsTemplate = 'rbxassetid://5529088945'
+    pants:SetAttribute('SakuraAngelLocalSkin', true)
+    pants.Parent = character
+
+    -- Popular pink angel wings. Failure here does not break the clothing.
+    addLocalAccessory(character, 8651335862, folder)
+
+    SakuraLocalSkinApplied = true
+    return true
+end
+
+local skinButton = Window:AddButton({
+    Title = 'Apply Pink Angel',
+    Description = 'Local visual skin — only on your client',
+    Tab = SkinChangerTab,
+    Callback = function()
+        local ok, err = applyPinkAngelLocalSkin()
+        if ok then
+            Window:Notify({
+                Title = 'Skin Changer',
+                Description = 'Pink Angel applied locally.',
+                Duration = 3,
+            })
+            -- После включения кнопка исчезает, как ты просил.
+            pcall(function()
+                if skinButton and skinButton.SetVisible then
+                    skinButton:SetVisible(false)
+                elseif skinButton and skinButton.Visible ~= nil then
+                    skinButton.Visible = false
+                end
+            end)
+        else
+            Window:Notify({
+                Title = 'Skin Changer',
+                Description = tostring(err or 'Failed to apply skin.'),
+                Duration = 3,
+            })
+        end
+    end,
+})
+
+Window:AddButton({
+    Title = 'Remove Local Skin',
+    Description = 'Restores the character by removing Sakura local items',
+    Tab = SkinChangerTab,
+    Callback = function()
+        local character = p and p.Character
+        if character then
+            removeLocalSkin(character)
+            SakuraLocalSkinApplied = false
+            pcall(function()
+                if skinButton and skinButton.SetVisible then
+                    skinButton:SetVisible(true)
+                elseif skinButton and skinButton.Visible ~= nil then
+                    skinButton.Visible = true
+                end
+            end)
+            Window:Notify({
+                Title = 'Skin Changer',
+                Description = 'Local skin removed.',
+                Duration = 2,
+            })
+        end
+    end,
+})
+
 SpawnerTab = Window:AddTab({
     Title = 'Spawner',
     Icon = 'rbxassetid://11963373994',
@@ -6825,18 +6826,17 @@ task.spawn(function()
     print("[Sakura] UI improved: 900x620 + draggable title bar + size limits")
 end)
 
--- ===== SAKURA ANGEL: НАДЁЖНАЯ ПЛАВАЮЩАЯ КНОПКА GUI =====
--- Это отдельная кнопка, поэтому библиотека больше не может сбросить её Position.
--- Мышь + Touch, короткий клик = открыть/скрыть GUI, удержание = перетащить.
+-- ===== SAKURA ANGEL: ПЛАВАЮЩАЯ КНОПКА ОТКРЫТИЯ МЕНЮ =====
+-- Одна кнопка SA: короткий клик открывает/скрывает ИМЕННО основное меню,
+-- удержание и движение мыши/тача переносит кнопку. Позиция сохраняется.
 task.spawn(function()
     local UIS = game:GetService("UserInputService")
     local Players = game:GetService("Players")
     local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
-
     local GUI_NAME = "SakuraAngelFloatingButton"
-    local MOVE_THRESHOLD = 8
-    local EDGE_MARGIN = 8
     local SAVE_FILE = "SakuraAngelTogglePosition.txt"
+    local EDGE = 8
+    local THRESHOLD = 7
 
     local old = playerGui:FindFirstChild(GUI_NAME)
     if old then old:Destroy() end
@@ -6846,22 +6846,22 @@ task.spawn(function()
     sg.ResetOnSpawn = false
     sg.IgnoreGuiInset = true
     sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    sg.DisplayOrder = 10000
     sg.Parent = playerGui
 
     local button = Instance.new("TextButton")
-    button.Name = "ToggleButton"
+    button.Name = "MenuButton"
     button.Size = UDim2.fromOffset(48, 48)
-    button.AnchorPoint = Vector2.new(0, 0)
-    button.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-    button.BackgroundTransparency = 0.08
+    button.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    button.BackgroundTransparency = 0.06
     button.BorderSizePixel = 0
     button.Text = "SA"
-    button.TextColor3 = Color3.fromRGB(255, 170, 215)
-    button.TextSize = 14
+    button.TextColor3 = Color3.fromRGB(255, 145, 205)
+    button.TextSize = 15
     button.Font = Enum.Font.GothamBold
-    button.AutoButtonColor = true
+    button.AutoButtonColor = false
     button.Active = true
-    button.ZIndex = 1000
+    button.ZIndex = 10001
     button.Parent = sg
 
     local corner = Instance.new("UICorner")
@@ -6869,66 +6869,124 @@ task.spawn(function()
     corner.Parent = button
 
     local stroke = Instance.new("UIStroke")
-    stroke.Thickness = 1.5
-    stroke.Transparency = 0.15
-    stroke.Color = Color3.fromRGB(255, 120, 190)
+    stroke.Thickness = 1.25
+    stroke.Transparency = 0.2
+    stroke.Color = Color3.fromRGB(255, 110, 185)
     stroke.Parent = button
 
     local function clamp(x, y)
         local camera = workspace.CurrentCamera
         if not camera then return x, y end
         local vp = camera.ViewportSize
-        return math.clamp(x, EDGE_MARGIN, math.max(EDGE_MARGIN, vp.X - button.AbsoluteSize.X - EDGE_MARGIN)),
-               math.clamp(y, EDGE_MARGIN, math.max(EDGE_MARGIN, vp.Y - button.AbsoluteSize.Y - EDGE_MARGIN))
+        return math.clamp(x, EDGE, math.max(EDGE, vp.X - 48 - EDGE)),
+               math.clamp(y, EDGE, math.max(EDGE, vp.Y - 48 - EDGE))
     end
 
-    local function loadSaved()
+    local function savePosition()
+        local x, y = button.Position.X.Offset, button.Position.Y.Offset
+        pcall(function()
+            local env = (getgenv and getgenv()) or _G
+            env.SakuraAngelTogglePosition = { X = x, Y = y }
+        end)
+        pcall(function()
+            if writefile then writefile(SAVE_FILE, string.format("%s,%s", x, y)) end
+        end)
+    end
+
+    local function loadPosition()
         local x, y
         pcall(function()
             if isfile and isfile(SAVE_FILE) then
                 local raw = readfile(SAVE_FILE)
                 local a, b = raw:match("^([%-%.%d]+),([%-%.%d]+)$")
-                if a and b then x, y = tonumber(a), tonumber(b) end
+                x, y = tonumber(a), tonumber(b)
             end
         end)
         if not x or not y then
-            local g = getgenv and getgenv().SakuraAngelTogglePosition
-            if g then x, y = tonumber(g.X), tonumber(g.Y) end
+            pcall(function()
+                local env = (getgenv and getgenv()) or _G
+                local pos = env.SakuraAngelTogglePosition
+                if pos then x, y = tonumber(pos.X), tonumber(pos.Y) end
+            end)
         end
         if x and y then
             x, y = clamp(x, y)
             button.Position = UDim2.fromOffset(x, y)
+            return
+        end
+        local camera = workspace.CurrentCamera
+        if camera then
+            local vp = camera.ViewportSize
+            button.Position = UDim2.fromOffset(math.max(EDGE, vp.X - 64), math.max(EDGE, vp.Y * 0.5 - 24))
         else
-            local camera = workspace.CurrentCamera
-            if camera then
-                local vp = camera.ViewportSize
-                button.Position = UDim2.fromOffset(vp.X - 64, math.max(EDGE_MARGIN, vp.Y * 0.5 - 24))
-            end
+            button.Position = UDim2.fromOffset(EDGE, EDGE)
         end
     end
 
-    local function savePosition()
-        local x, y = button.Position.X.Offset, button.Position.Y.Offset
-        local g = getgenv and getgenv() or _G
-        g.SakuraAngelTogglePosition = {X = x, Y = y}
+    loadPosition()
+
+    -- Наиболее надёжный вариант: попросить саму UI-библиотеку переключить окно.
+    -- Если API библиотеки отличается, ниже есть резервный поиск ScreenGui/Frame.
+    local function libraryToggle()
+        local ok = false
         pcall(function()
-            if writefile then writefile(SAVE_FILE, tostring(x) .. "," .. tostring(y)) end
+            if Library and type(Library.Toggle) == "function" then
+                Library:Toggle()
+                ok = true
+            end
         end)
+        if not ok then
+            pcall(function()
+                if Window and type(Window.Toggle) == "function" then
+                    Window:Toggle()
+                    ok = true
+                end
+            end)
+        end
+        return ok
     end
 
-    loadSaved()
+    local function scoreGui(root)
+        local score = 0
+        for _, obj in ipairs(root:GetDescendants()) do
+            if obj:IsA("Frame") then
+                local size = obj.AbsoluteSize
+                if size.X >= 650 and size.Y >= 400 then score += 8 end
+            elseif obj:IsA("TextLabel") or obj:IsA("TextButton") then
+                local text = tostring(obj.Text or "")
+                if text == "Sakura Angel" then score += 50 end
+                if text == "Sakura Angel" then score += 1 end -- legacy fallback only
+            end
+        end
+        return score
+    end
 
-    local function findMainWindow()
+    local function findMainScreenGui()
+        local candidates = {}
+        for _, root in ipairs({playerGui, game:GetService("CoreGui")}) do
+            for _, child in ipairs(root:GetChildren()) do
+                if child:IsA("ScreenGui") and child ~= sg then
+                    local score = scoreGui(child)
+                    if score > 0 then
+                        table.insert(candidates, {gui = child, score = score})
+                    end
+                end
+            end
+        end
+        table.sort(candidates, function(a,b) return a.score > b.score end)
+        return candidates[1] and candidates[1].gui or nil
+    end
+
+    local function findMainFrame()
         local best, bestScore = nil, -math.huge
         for _, root in ipairs({playerGui, game:GetService("CoreGui")}) do
             for _, obj in ipairs(root:GetDescendants()) do
-                if obj:IsA("Frame") and obj.Visible then
-                    local score = 0
+                if obj:IsA("Frame") then
                     local size = obj.AbsoluteSize
-                    if size.X >= 600 and size.Y >= 400 then score += 5 end
+                    local score = (size.X >= 650 and size.Y >= 400) and 8 or 0
                     for _, child in ipairs(obj:GetDescendants()) do
                         if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text == "Sakura Angel" then
-                            score += 20
+                            score += 50
                             break
                         end
                     end
@@ -6939,63 +6997,71 @@ task.spawn(function()
         return best
     end
 
-    local function toggleWindow()
-        local frame = findMainWindow()
+    local function toggleMainMenu()
+        if libraryToggle() then return end
+
+        local gui = findMainScreenGui()
+        if gui then
+            gui.Enabled = not gui.Enabled
+            return
+        end
+
+        local frame = findMainFrame()
         if frame then
             frame.Visible = not frame.Visible
         end
     end
 
-    local pressed, dragging = false, false
-    local startPointer, startX, startY
+    local down = false
+    local dragging = false
+    local startPos, startPointer
+
+    local function begin(pointer)
+        down = true
+        dragging = false
+        startPointer = pointer
+        startPos = Vector2.new(button.Position.X.Offset, button.Position.Y.Offset)
+    end
+
+    local function move(pointer)
+        if not down or not startPointer then return end
+        local delta = pointer - startPointer
+        if not dragging and delta.Magnitude >= THRESHOLD then dragging = true end
+        if dragging then
+            local x, y = clamp(startPos.X + delta.X, startPos.Y + delta.Y)
+            button.Position = UDim2.fromOffset(x, y)
+        end
+    end
+
+    local function finish()
+        if not down then return end
+        local moved = dragging
+        down, dragging, startPointer = false, false, nil
+        if moved then savePosition() else toggleMainMenu() end
+    end
 
     button.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            pressed, dragging = true, false
-            startPointer = input.Position
-            startX, startY = button.Position.X.Offset, button.Position.Y.Offset
+            begin(input.Position)
+        elseif input.UserInputType == Enum.UserInputType.Touch then
+            begin(input.Position)
         end
     end)
 
     UIS.InputChanged:Connect(function(input)
-        if not pressed or input.UserInputType ~= Enum.UserInputType.MouseMovement or not startPointer then return end
-        local delta = input.Position - startPointer
-        if not dragging and delta.Magnitude >= MOVE_THRESHOLD then dragging = true end
-        if dragging then
-            local x, y = clamp(startX + delta.X, startY + delta.Y)
-            button.Position = UDim2.fromOffset(x, y)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            move(input.Position)
+        elseif input.UserInputType == Enum.UserInputType.Touch then
+            move(input.Position)
         end
     end)
 
     UIS.InputEnded:Connect(function(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1 or not pressed then return end
-        local wasDragging = dragging
-        pressed, dragging, startPointer = false, false, nil
-        if wasDragging then savePosition() else toggleWindow() end
-    end)
-
-    button.TouchPan:Connect(function(_, totalTranslation, _, state)
-        if state == Enum.UserInputState.Begin then
-            pressed, dragging = true, false
-            startX, startY = button.Position.X.Offset, button.Position.Y.Offset
-            return
-        end
-        if state == Enum.UserInputState.Change and pressed then
-            if not dragging and totalTranslation.Magnitude >= MOVE_THRESHOLD then dragging = true end
-            if dragging then
-                local x, y = clamp(startX + totalTranslation.X, startY + totalTranslation.Y)
-                button.Position = UDim2.fromOffset(x, y)
-            end
-            return
-        end
-        if state == Enum.UserInputState.End then
-            local wasDragging = dragging
-            pressed, dragging = false, false
-            if wasDragging then savePosition() else toggleWindow() end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            finish()
         end
     end)
 
-    -- После изменения разрешения/ориентации удерживаем кнопку внутри экрана.
     task.spawn(function()
         while button.Parent do
             task.wait(1)
@@ -7007,7 +7073,7 @@ task.spawn(function()
         end
     end)
 
-    print("[Sakura Angel] Floating GUI button READY - drag with mouse/touch")
+    print("[Sakura Angel] SA menu button ready")
 end)
 
 -- ===== КОМПАКТНЫЕ TOGGLE-ЭЛЕМЕНТЫ =====
