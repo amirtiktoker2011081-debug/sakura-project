@@ -81,7 +81,7 @@ if not success then
 end
 
 Window = Library:CreateWindow({
-    Title = 'Sakura Project',
+    Title = 'Sakura Angel',
     Theme = 'Dark',
     Size = UDim2.fromOffset(900, 620),
     Transparency = 0.1,
@@ -4233,8 +4233,8 @@ watermarkOffsetX = 0
 watermarkOffsetY = 0
 watermarkTargetOffsetX = 0
 watermarkTargetOffsetY = 0
-watermarkHeartagramColor = Color3.fromRGB(226, 226, 226)
-watermarkHubColor = Color3.fromRGB(255, 123, 189)
+watermarkSakuraColor = Color3.fromRGB(226, 226, 226)
+watermarkAngelColor = Color3.fromRGB(255, 123, 189)
 watermarkSafeColor = Color3.fromRGB(0, 255, 0)
 watermarkUnsafeColor = Color3.fromRGB(255, 0, 0)
 
@@ -4256,19 +4256,19 @@ local function createWatermark()
     end
 
     watermarkText1 = Drawing.new('Text')
-    watermarkText1.Text = 'heartagram'
+    watermarkText1.Text = 'Sakura'
     watermarkText1.Size = 18
     watermarkText1.Center = false
     watermarkText1.Outline = true
-    watermarkText1.Color = watermarkHeartagramColor
+    watermarkText1.Color = watermarkSakuraColor
     watermarkText1.Visible = true
     watermarkText1.Font = 3
     watermarkText2 = Drawing.new('Text')
-    watermarkText2.Text = 'hub'
+    watermarkText2.Text = 'Angel'
     watermarkText2.Size = 18
     watermarkText2.Center = false
     watermarkText2.Outline = true
-    watermarkText2.Color = watermarkHubColor
+    watermarkText2.Color = watermarkAngelColor
     watermarkText2.Visible = true
     watermarkText2.Font = 3
     watermarkText3 = Drawing.new('Text')
@@ -4293,12 +4293,12 @@ Window:AddToggle({
     end,
 })
 Window:AddColorPicker({
-    Title = 'Heartagram Color',
-    Description = "Color for 'heartagram' text",
+    Title = 'Sakura Color',
+    Description = "Color for 'Sakura' text",
     Default = Color3.fromRGB(226, 226, 226),
     Tab = VisualsTab,
     Callback = function(a)
-        watermarkHeartagramColor = a
+        watermarkSakuraColor = a
 
         if watermarkText1 then
             watermarkText1.Color = a
@@ -4306,12 +4306,12 @@ Window:AddColorPicker({
     end,
 })
 Window:AddColorPicker({
-    Title = 'Hub Color',
-    Description = "Color for 'hub' text",
+    Title = 'Angel Color',
+    Description = "Color for 'Angel' text",
     Default = Color3.fromRGB(255, 123, 189),
     Tab = VisualsTab,
     Callback = function(a)
-        watermarkHubColor = a
+        watermarkAngelColor = a
 
         if watermarkText2 then
             watermarkText2.Color = a
@@ -5300,7 +5300,7 @@ Window:AddSlider({
     end,
 })
 Window:Notify({
-    Title = 'Heartagram Hub',
+    Title = 'Sakura Angel',
     Description = 'Press Left Alt to Minimize and Open the tab!',
     Duration = 10,
 })
@@ -6552,7 +6552,7 @@ end)
 
 
 -- ===== УЛУЧШЕННОЕ ПЕРЕТАСКИВАНИЕ ГЛАВНОГО МЕНЮ =====
--- Ищем именно окно с заголовком Sakura Project, а не случайный Frame по размеру.
+-- Ищем именно окно с заголовком Sakura Angel, а не случайный Frame по размеру.
 task.spawn(function()
     task.wait(0.8)
 
@@ -6567,7 +6567,7 @@ task.spawn(function()
 
         for _, root in ipairs(roots) do
             for _, obj in ipairs(root:GetDescendants()) do
-                if obj:IsA("Frame") and obj.Visible then
+                if obj:IsA("Frame") then
                     local score = 0
                     local size = obj.AbsoluteSize
 
@@ -6576,7 +6576,7 @@ task.spawn(function()
                     if obj.Name:lower():find("main") then score += 2 end
 
                     for _, child in ipairs(obj:GetDescendants()) do
-                        if child:IsA("TextLabel") and child.Text == "Sakura Project" then
+                        if child:IsA("TextLabel") and child.Text == "Sakura Angel" then
                             score += 20
                             break
                         end
@@ -6614,7 +6614,7 @@ task.spawn(function()
     -- Перетаскивание только за верхнюю часть окна, чтобы кнопки/переключатели не мешали.
     local dragHandle = nil
     for _, obj in ipairs(windowFrame:GetDescendants()) do
-        if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text == "Sakura Project" then
+        if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text == "Sakura Angel" then
             dragHandle = obj.Parent
             break
         end
@@ -6667,210 +6667,195 @@ task.spawn(function()
     print("[Sakura] UI improved: 900x620 + draggable title bar + size limits")
 end)
 
--- ===== НАДЁЖНОЕ ПЕРЕТАСКИВАНИЕ КНОПКИ ОТКРЫТИЯ CLICKGUI =====
--- Android Touch + PC Mouse. Обычный тап/клик сохраняет штатное открытие ClickGui.
--- Долгое движение/перетаскивание двигает только кнопку открытия.
+-- ===== SAKURA ANGEL: НАДЁЖНАЯ ПЛАВАЮЩАЯ КНОПКА GUI =====
+-- Это отдельная кнопка, поэтому библиотека больше не может сбросить её Position.
+-- Мышь + Touch, короткий клик = открыть/скрыть GUI, удержание = перетащить.
 task.spawn(function()
     local UIS = game:GetService("UserInputService")
     local Players = game:GetService("Players")
-    local CoreGui = game:GetService("CoreGui")
     local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 
-    local MOVE_THRESHOLD = 10
+    local GUI_NAME = "SakuraAngelFloatingButton"
+    local MOVE_THRESHOLD = 8
     local EDGE_MARGIN = 8
-    local boundButton = nil
-    local connections = {}
+    local SAVE_FILE = "SakuraAngelTogglePosition.txt"
 
-    local function disconnectAll()
-        for _, c in ipairs(connections) do
-            pcall(function() c:Disconnect() end)
+    local old = playerGui:FindFirstChild(GUI_NAME)
+    if old then old:Destroy() end
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name = GUI_NAME
+    sg.ResetOnSpawn = false
+    sg.IgnoreGuiInset = true
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    sg.Parent = playerGui
+
+    local button = Instance.new("TextButton")
+    button.Name = "ToggleButton"
+    button.Size = UDim2.fromOffset(48, 48)
+    button.AnchorPoint = Vector2.new(0, 0)
+    button.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    button.BackgroundTransparency = 0.08
+    button.BorderSizePixel = 0
+    button.Text = "SA"
+    button.TextColor3 = Color3.fromRGB(255, 170, 215)
+    button.TextSize = 14
+    button.Font = Enum.Font.GothamBold
+    button.AutoButtonColor = true
+    button.Active = true
+    button.ZIndex = 1000
+    button.Parent = sg
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = button
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.15
+    stroke.Color = Color3.fromRGB(255, 120, 190)
+    stroke.Parent = button
+
+    local function clamp(x, y)
+        local camera = workspace.CurrentCamera
+        if not camera then return x, y end
+        local vp = camera.ViewportSize
+        return math.clamp(x, EDGE_MARGIN, math.max(EDGE_MARGIN, vp.X - button.AbsoluteSize.X - EDGE_MARGIN)),
+               math.clamp(y, EDGE_MARGIN, math.max(EDGE_MARGIN, vp.Y - button.AbsoluteSize.Y - EDGE_MARGIN))
+    end
+
+    local function loadSaved()
+        local x, y
+        pcall(function()
+            if isfile and isfile(SAVE_FILE) then
+                local raw = readfile(SAVE_FILE)
+                local a, b = raw:match("^([%-%.%d]+),([%-%.%d]+)$")
+                if a and b then x, y = tonumber(a), tonumber(b) end
+            end
+        end)
+        if not x or not y then
+            local g = getgenv and getgenv().SakuraAngelTogglePosition
+            if g then x, y = tonumber(g.X), tonumber(g.Y) end
         end
-        table.clear(connections)
+        if x and y then
+            x, y = clamp(x, y)
+            button.Position = UDim2.fromOffset(x, y)
+        else
+            local camera = workspace.CurrentCamera
+            if camera then
+                local vp = camera.ViewportSize
+                button.Position = UDim2.fromOffset(vp.X - 64, math.max(EDGE_MARGIN, vp.Y * 0.5 - 24))
+            end
+        end
     end
 
-    local function isPossibleToggle(obj)
-        if not (obj:IsA("ImageButton") or obj:IsA("TextButton")) then return false end
-        if not obj.Visible then return false end
-        local size = obj.AbsoluteSize
-        if size.X < 30 or size.X > 140 or size.Y < 30 or size.Y > 140 then return false end
-        if math.abs(size.X - size.Y) > 35 then return false end
-        return true
+    local function savePosition()
+        local x, y = button.Position.X.Offset, button.Position.Y.Offset
+        local g = getgenv and getgenv() or _G
+        g.SakuraAngelTogglePosition = {X = x, Y = y}
+        pcall(function()
+            if writefile then writefile(SAVE_FILE, tostring(x) .. "," .. tostring(y)) end
+        end)
     end
 
-    local function findLibraryToggle()
+    loadSaved()
+
+    local function findMainWindow()
         local best, bestScore = nil, -math.huge
-        for _, root in ipairs({playerGui, CoreGui}) do
-            for _, gui in ipairs(root:GetChildren()) do
-                if gui:IsA("ScreenGui") then
-                    local hasSakura = false
-                    for _, obj in ipairs(gui:GetDescendants()) do
-                        if (obj:IsA("TextLabel") or obj:IsA("TextButton"))
-                            and (obj.Text == "Sakura Project" or obj.Text == "Heartagram Hub") then
-                            hasSakura = true
+        for _, root in ipairs({playerGui, game:GetService("CoreGui")}) do
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("Frame") and obj.Visible then
+                    local score = 0
+                    local size = obj.AbsoluteSize
+                    if size.X >= 600 and size.Y >= 400 then score += 5 end
+                    for _, child in ipairs(obj:GetDescendants()) do
+                        if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text == "Sakura Angel" then
+                            score += 20
                             break
                         end
                     end
-
-                    if hasSakura then
-                        for _, obj in ipairs(gui:GetDescendants()) do
-                            if isPossibleToggle(obj) then
-                                local n = obj.Name:lower()
-                                local pos = obj.AbsolutePosition
-                                local size = obj.AbsoluteSize
-                                local score = 0
-                                if obj:IsA("ImageButton") then score += 8 end
-                                if n:find("toggle") then score += 50 end
-                                if n:find("min") then score += 45 end
-                                if n:find("menu") then score += 35 end
-                                if n:find("open") then score += 30 end
-                                if n:find("button") then score += 10 end
-                                if pos.Y < 220 then score += 12 end
-                                if size.X >= 45 and size.X <= 95 then score += 8 end
-                                if size.Y >= 45 and size.Y <= 95 then score += 8 end
-                                if score > bestScore then
-                                    bestScore = score
-                                    best = obj
-                                end
-                            end
-                        end
-                    end
+                    if score > bestScore then bestScore, best = score, obj end
                 end
             end
         end
         return best
     end
 
-    local function clampPosition(button, x, y)
-        local camera = workspace.CurrentCamera
-        if not camera then return x, y end
-        local viewport = camera.ViewportSize
-        local size = button.AbsoluteSize
-        local maxX = math.max(EDGE_MARGIN, viewport.X - size.X - EDGE_MARGIN)
-        local maxY = math.max(EDGE_MARGIN, viewport.Y - size.Y - EDGE_MARGIN)
-        return math.clamp(x, EDGE_MARGIN, maxX), math.clamp(y, EDGE_MARGIN, maxY)
-    end
-
-    local function savePosition(button)
-        if not button or not button.Parent then return end
-        _G.SakuraTogglePosition = {
-            X = button.Position.X.Offset,
-            Y = button.Position.Y.Offset
-        }
-    end
-
-    local function restorePosition(button)
-        local saved = _G.SakuraTogglePosition
-        if not saved then return end
-        task.defer(function()
-            if button and button.Parent then
-                local x, y = clampPosition(button, saved.X, saved.Y)
-                button.Position = UDim2.fromOffset(x, y)
-            end
-        end)
-    end
-
-    local function bindButton(button)
-        if not button or button == boundButton then return end
-        disconnectAll()
-        boundButton = button
-
-        pcall(function() button.Active = true end)
-        pcall(function() button.Selectable = false end)
-        pcall(function() button.Interactable = true end)
-        restorePosition(button)
-
-        local pressed = false
-        local dragging = false
-        local startPointer = nil
-        local startX, startY = 0, 0
-
-        -- PC MOUSE
-        table.insert(connections, button.InputBegan:Connect(function(input)
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-            pressed = true
-            dragging = false
-            startPointer = input.Position
-            startX = button.Position.X.Offset
-            startY = button.Position.Y.Offset
-        end))
-
-        table.insert(connections, UIS.InputChanged:Connect(function(input)
-            if not pressed or not startPointer then return end
-            if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-            local delta = input.Position - startPointer
-            if not dragging and delta.Magnitude >= MOVE_THRESHOLD then
-                dragging = true
-                pcall(function() button.Interactable = false end)
-            end
-            if dragging and button.Parent then
-                local x, y = clampPosition(button, startX + delta.X, startY + delta.Y)
-                button.Position = UDim2.fromOffset(x, y)
-            end
-        end))
-
-        table.insert(connections, UIS.InputEnded:Connect(function(input)
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1 or not pressed then return end
-            if dragging then savePosition(button) end
-            pressed = false
-            dragging = false
-            startPointer = nil
-            pcall(function() button.Interactable = true end)
-        end))
-
-        -- ANDROID / TOUCH
-        if button.TouchPan then
-            table.insert(connections, button.TouchPan:Connect(function(touchPositions, totalTranslation, velocity, state)
-                if not button.Parent then return end
-                if state == Enum.UserInputState.Begin then
-                    pressed = true
-                    dragging = false
-                    startX = button.Position.X.Offset
-                    startY = button.Position.Y.Offset
-                    return
-                end
-                if state == Enum.UserInputState.Change and pressed then
-                    if not dragging and totalTranslation.Magnitude >= MOVE_THRESHOLD then
-                        dragging = true
-                        pcall(function() button.Interactable = false end)
-                    end
-                    if dragging then
-                        local x, y = clampPosition(button, startX + totalTranslation.X, startY + totalTranslation.Y)
-                        button.Position = UDim2.fromOffset(x, y)
-                    end
-                    return
-                end
-                if state == Enum.UserInputState.End then
-                    if dragging then savePosition(button) end
-                    pressed = false
-                    dragging = false
-                    startPointer = nil
-                    pcall(function() button.Interactable = true end)
-                end
-            end))
+    local function toggleWindow()
+        local frame = findMainWindow()
+        if frame then
+            frame.Visible = not frame.Visible
         end
+    end
 
-        table.insert(connections, button.AncestryChanged:Connect(function(_, parent)
-            if not parent then
-                boundButton = nil
-                disconnectAll()
+    local pressed, dragging = false, false
+    local startPointer, startX, startY
+
+    button.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            pressed, dragging = true, false
+            startPointer = input.Position
+            startX, startY = button.Position.X.Offset, button.Position.Y.Offset
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if not pressed or input.UserInputType ~= Enum.UserInputType.MouseMovement or not startPointer then return end
+        local delta = input.Position - startPointer
+        if not dragging and delta.Magnitude >= MOVE_THRESHOLD then dragging = true end
+        if dragging then
+            local x, y = clamp(startX + delta.X, startY + delta.Y)
+            button.Position = UDim2.fromOffset(x, y)
+        end
+    end)
+
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 or not pressed then return end
+        local wasDragging = dragging
+        pressed, dragging, startPointer = false, false, nil
+        if wasDragging then savePosition() else toggleWindow() end
+    end)
+
+    button.TouchPan:Connect(function(_, totalTranslation, _, state)
+        if state == Enum.UserInputState.Begin then
+            pressed, dragging = true, false
+            startX, startY = button.Position.X.Offset, button.Position.Y.Offset
+            return
+        end
+        if state == Enum.UserInputState.Change and pressed then
+            if not dragging and totalTranslation.Magnitude >= MOVE_THRESHOLD then dragging = true end
+            if dragging then
+                local x, y = clamp(startX + totalTranslation.X, startY + totalTranslation.Y)
+                button.Position = UDim2.fromOffset(x, y)
             end
-        end))
+            return
+        end
+        if state == Enum.UserInputState.End then
+            local wasDragging = dragging
+            pressed, dragging = false, false
+            if wasDragging then savePosition() else toggleWindow() end
+        end
+    end)
 
-        print("[Sakura] ClickGui toggle draggable: READY (Android + PC)")
-    end
+    -- После изменения разрешения/ориентации удерживаем кнопку внутри экрана.
+    task.spawn(function()
+        while button.Parent do
+            task.wait(1)
+            local x, y = clamp(button.Position.X.Offset, button.Position.Y.Offset)
+            if x ~= button.Position.X.Offset or y ~= button.Position.Y.Offset then
+                button.Position = UDim2.fromOffset(x, y)
+                savePosition()
+            end
+        end
+    end)
 
-    while true do
-        local button = findLibraryToggle()
-        if button ~= boundButton then bindButton(button) end
-        task.wait(0.35)
-    end
+    print("[Sakura Angel] Floating GUI button READY - drag with mouse/touch")
 end)
 
--- ===== УВЕЛИЧЕНИЕ ЧИТАЕМОСТИ ТЕКСТА GUI =====
--- Не масштабируем само окно повторно: увеличиваем именно шрифты после создания UI.
+-- ===== КОМПАКТНЫЕ TOGGLE-ЭЛЕМЕНТЫ =====
+-- Само окно остаётся большим, а названия функций и чекбоксы делаются компактнее.
 task.spawn(function()
     task.wait(1.2)
-
     local Players = game:GetService("Players")
     local CoreGui = game:GetService("CoreGui")
     local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
@@ -6884,15 +6869,12 @@ task.spawn(function()
                     local size = obj.AbsoluteSize
                     if size.X >= 600 and size.Y >= 400 then score += 5 end
                     for _, child in ipairs(obj:GetDescendants()) do
-                        if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text == "Sakura Project" then
+                        if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text == "Sakura Angel" then
                             score += 20
                             break
                         end
                     end
-                    if score > bestScore then
-                        bestScore = score
-                        best = obj
-                    end
+                    if score > bestScore then bestScore, best = score, obj end
                 end
             end
         end
@@ -6902,22 +6884,35 @@ task.spawn(function()
     local windowFrame = findMainWindow()
     if not windowFrame then return end
 
-    for _, obj in ipairs(windowFrame:GetDescendants()) do
-        if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-            if obj.TextSize > 0 then
-                local newSize = math.floor(obj.TextSize * 1.28 + 0.5)
-                obj.TextSize = math.clamp(newSize, 12, 24)
+    for _, row in ipairs(windowFrame:GetDescendants()) do
+        if row:IsA("Frame") then
+            local textLabel, check = nil, nil
+            for _, child in ipairs(row:GetChildren()) do
+                if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text ~= "" then
+                    textLabel = child
+                elseif child:IsA("ImageButton") or child:IsA("ImageLabel") then
+                    local p = child.Position
+                    if p.X.Scale >= 0.5 then check = child end
+                end
+            end
+            local h = row.AbsoluteSize.Y
+            if textLabel and check and h >= 25 and h <= 70 then
+                row.Size = UDim2.new(row.Size.X.Scale, row.Size.X.Offset, 0, 30)
+                textLabel.TextSize = math.clamp(math.floor(textLabel.TextSize * 0.78), 11, 14)
+                check.Size = UDim2.fromOffset(18, 18)
+                check.Position = UDim2.new(1, -24, 0.5, -9)
             end
         end
     end
-
-    print("[Sakura] GUI text readability increased")
+    print("[Sakura Angel] Compact function names + checkboxes applied")
 end)
+
+-- ===== ТЕКСТ GUI НЕ УВЕЛИЧИВАЕМ: КОМПАКТНЫЙ РЕЖИМ ВЫШЕ =====
 
 -- Pink "🌸 Menu" button removed: the library's own minimize button + LeftAlt keybind are enough.
 task.wait(1)
 Window:Notify({
-    Title = 'Sakura Project ✅',
+    Title = 'Sakura Angel ✅',
     Description = 'UI improved: larger window, draggable title bar and cleaner layout.',
     Duration = 5,
 })
