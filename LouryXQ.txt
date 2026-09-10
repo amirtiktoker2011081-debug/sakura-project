@@ -6668,15 +6668,16 @@ task.spawn(function()
 end)
 
 -- ===== НАДЁЖНОЕ ПЕРЕТАСКИВАНИЕ КНОПКИ ОТКРЫТИЯ CLICKGUI =====
--- Android Touch + PC Mouse. Короткое нажатие оставляет штатное открытие ClickGui.
+-- Android Touch + PC Mouse. Обычный тап/клик сохраняет штатное открытие ClickGui.
+-- Долгое движение/перетаскивание двигает только кнопку открытия.
 task.spawn(function()
     local UIS = game:GetService("UserInputService")
     local Players = game:GetService("Players")
     local CoreGui = game:GetService("CoreGui")
     local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 
-    local MOVE_THRESHOLD = 8
-    local EDGE_MARGIN = 4
+    local MOVE_THRESHOLD = 10
+    local EDGE_MARGIN = 8
     local boundButton = nil
     local connections = {}
 
@@ -6687,12 +6688,12 @@ task.spawn(function()
         table.clear(connections)
     end
 
-    local function isRoundButton(obj)
+    local function isPossibleToggle(obj)
         if not (obj:IsA("ImageButton") or obj:IsA("TextButton")) then return false end
         if not obj.Visible then return false end
         local size = obj.AbsoluteSize
-        if size.X < 35 or size.X > 125 or size.Y < 35 or size.Y > 125 then return false end
-        if math.abs(size.X - size.Y) > 30 then return false end
+        if size.X < 30 or size.X > 140 or size.Y < 30 or size.Y > 140 then return false end
+        if math.abs(size.X - size.Y) > 35 then return false end
         return true
     end
 
@@ -6703,7 +6704,8 @@ task.spawn(function()
                 if gui:IsA("ScreenGui") then
                     local hasSakura = false
                     for _, obj in ipairs(gui:GetDescendants()) do
-                        if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text == "Sakura Project" then
+                        if (obj:IsA("TextLabel") or obj:IsA("TextButton"))
+                            and (obj.Text == "Sakura Project" or obj.Text == "Heartagram Hub") then
                             hasSakura = true
                             break
                         end
@@ -6711,20 +6713,20 @@ task.spawn(function()
 
                     if hasSakura then
                         for _, obj in ipairs(gui:GetDescendants()) do
-                            if isRoundButton(obj) then
+                            if isPossibleToggle(obj) then
                                 local n = obj.Name:lower()
                                 local pos = obj.AbsolutePosition
                                 local size = obj.AbsoluteSize
                                 local score = 0
-
-                                if obj:IsA("ImageButton") then score += 5 end
-                                if n:find("toggle") then score += 40 end
-                                if n:find("min") then score += 35 end
-                                if n:find("menu") then score += 30 end
-                                if n:find("open") then score += 25 end
-                                if pos.Y < 180 then score += 10 end
-                                if size.X >= 45 and size.X <= 90 then score += 5 end
-
+                                if obj:IsA("ImageButton") then score += 8 end
+                                if n:find("toggle") then score += 50 end
+                                if n:find("min") then score += 45 end
+                                if n:find("menu") then score += 35 end
+                                if n:find("open") then score += 30 end
+                                if n:find("button") then score += 10 end
+                                if pos.Y < 220 then score += 12 end
+                                if size.X >= 45 and size.X <= 95 then score += 8 end
+                                if size.Y >= 45 and size.Y <= 95 then score += 8 end
                                 if score > bestScore then
                                     bestScore = score
                                     best = obj
@@ -6749,6 +6751,7 @@ task.spawn(function()
     end
 
     local function savePosition(button)
+        if not button or not button.Parent then return end
         _G.SakuraTogglePosition = {
             X = button.Position.X.Offset,
             Y = button.Position.Y.Offset
@@ -6771,67 +6774,80 @@ task.spawn(function()
         disconnectAll()
         boundButton = button
 
-        -- Обязательно для получения Touch/Input событий.
-        button.Active = true
-        if button:IsA("GuiButton") then button.Selectable = false end
+        pcall(function() button.Active = true end)
+        pcall(function() button.Selectable = false end)
+        pcall(function() button.Interactable = true end)
         restorePosition(button)
 
         local pressed = false
         local dragging = false
-        local startInput = nil
         local startPointer = nil
         local startX, startY = 0, 0
 
-        local function begin(input)
-            local t = input.UserInputType
-            if t ~= Enum.UserInputType.Touch and t ~= Enum.UserInputType.MouseButton1 then return end
+        -- PC MOUSE
+        table.insert(connections, button.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
             pressed = true
             dragging = false
-            startInput = input
             startPointer = input.Position
             startX = button.Position.X.Offset
             startY = button.Position.Y.Offset
-        end
+        end))
 
-        local function move(pointer)
-            if not pressed or not startInput or not startPointer then return end
-            local delta = pointer - startPointer
+        table.insert(connections, UIS.InputChanged:Connect(function(input)
+            if not pressed or not startPointer then return end
+            if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+            local delta = input.Position - startPointer
             if not dragging and delta.Magnitude >= MOVE_THRESHOLD then
                 dragging = true
+                pcall(function() button.Interactable = false end)
             end
-            if dragging then
+            if dragging and button.Parent then
                 local x, y = clampPosition(button, startX + delta.X, startY + delta.Y)
                 button.Position = UDim2.fromOffset(x, y)
-                savePosition(button)
-            end
-        end
-
-        local function finish(input)
-            if not startInput then return end
-            if input == startInput or input.UserInputType == Enum.UserInputType.MouseButton1
-                or input.UserInputType == Enum.UserInputType.Touch then
-                pressed = false
-                dragging = false
-                startInput = nil
-                startPointer = nil
-            end
-        end
-
-        table.insert(connections, button.InputBegan:Connect(begin))
-
-        -- Не используем button.InputChanged для Touch: на некоторых мобильных
-        -- клиентах он не даёт стабильного потока координат.
-        table.insert(connections, UIS.InputChanged:Connect(function(input)
-            if not startInput then return end
-            if startInput.UserInputType == Enum.UserInputType.Touch and input == startInput then
-                move(input.Position)
-            elseif startInput.UserInputType == Enum.UserInputType.MouseButton1
-                and input.UserInputType == Enum.UserInputType.MouseMovement then
-                move(input.Position)
             end
         end))
 
-        table.insert(connections, UIS.InputEnded:Connect(finish))
+        table.insert(connections, UIS.InputEnded:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 or not pressed then return end
+            if dragging then savePosition(button) end
+            pressed = false
+            dragging = false
+            startPointer = nil
+            pcall(function() button.Interactable = true end)
+        end))
+
+        -- ANDROID / TOUCH
+        if button.TouchPan then
+            table.insert(connections, button.TouchPan:Connect(function(touchPositions, totalTranslation, velocity, state)
+                if not button.Parent then return end
+                if state == Enum.UserInputState.Begin then
+                    pressed = true
+                    dragging = false
+                    startX = button.Position.X.Offset
+                    startY = button.Position.Y.Offset
+                    return
+                end
+                if state == Enum.UserInputState.Change and pressed then
+                    if not dragging and totalTranslation.Magnitude >= MOVE_THRESHOLD then
+                        dragging = true
+                        pcall(function() button.Interactable = false end)
+                    end
+                    if dragging then
+                        local x, y = clampPosition(button, startX + totalTranslation.X, startY + totalTranslation.Y)
+                        button.Position = UDim2.fromOffset(x, y)
+                    end
+                    return
+                end
+                if state == Enum.UserInputState.End then
+                    if dragging then savePosition(button) end
+                    pressed = false
+                    dragging = false
+                    startPointer = nil
+                    pcall(function() button.Interactable = true end)
+                end
+            end))
+        end
 
         table.insert(connections, button.AncestryChanged:Connect(function(_, parent)
             if not parent then
@@ -6840,14 +6856,12 @@ task.spawn(function()
             end
         end))
 
-        print("[Sakura] ClickGui toggle draggable: Android + PC")
+        print("[Sakura] ClickGui toggle draggable: READY (Android + PC)")
     end
 
     while true do
         local button = findLibraryToggle()
-        if button ~= boundButton then
-            bindButton(button)
-        end
+        if button ~= boundButton then bindButton(button) end
         task.wait(0.35)
     end
 end)
