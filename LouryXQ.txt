@@ -82,150 +82,14 @@ end
 
 Window = Library:CreateWindow({
     Title = 'Sakura Project',
-    Theme = 'Light',
-    Size = UDim2.fromOffset(700, 500),
+    Theme = 'Dark',
+    Size = UDim2.fromOffset(900, 620),
     Transparency = 0.1,
     Blurring = true,
     MinimizeKeybind = Enum.KeyCode.LeftAlt,
 })
 
--- ===== ДОБАВЛЯЕМ ПЕРЕТАСКИВАНИЕ ДЛЯ КРУГЛОЙ КНОПКИ С ИКОНКОЙ НОЖА =====
-task.spawn(function()
-    task.wait(0.5) -- Ждем пока библиотека создаст UI
-    
-    local function makeLibraryButtonDraggable()
-        local UserInputService = game:GetService("UserInputService")
-        local player = game:GetService("Players").LocalPlayer
-        local playerGui = player:WaitForChild("PlayerGui")
-        
-        -- Ищем круглую кнопку библиотеки (обычно ImageButton с круглой формой)
-        local function findLibraryToggleButton()
-            -- Проверяем PlayerGui
-            for _, gui in pairs(playerGui:GetChildren()) do
-                if gui:IsA("ScreenGui") then
-                    for _, obj in pairs(gui:GetDescendants()) do
-                        -- Ищем ImageButton с иконкой или круглую кнопку
-                        if obj:IsA("ImageButton") or obj:IsA("TextButton") then
-                            -- Проверяем размер (круглые кнопки обычно квадратные и небольшие)
-                            local size = obj.AbsoluteSize
-                            if size.X > 40 and size.X < 100 and math.abs(size.X - size.Y) < 20 then
-                                -- Проверяем наличие UICorner (круглая форма)
-                                if obj:FindFirstChildOfClass("UICorner") then
-                                    return obj
-                                end
-                                -- Или просто круглая кнопка
-                                if obj.Name:lower():find("toggle") or 
-                                   obj.Name:lower():find("button") or
-                                   obj.Name:lower():find("minimize") then
-                                    return obj
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-            
-            -- Проверяем CoreGui
-            local coreGui = game:GetService("CoreGui")
-            for _, gui in pairs(coreGui:GetChildren()) do
-                if gui:IsA("ScreenGui") then
-                    for _, obj in pairs(gui:GetDescendants()) do
-                        if obj:IsA("ImageButton") or obj:IsA("TextButton") then
-                            local size = obj.AbsoluteSize
-                            if size.X > 40 and size.X < 100 and math.abs(size.X - size.Y) < 20 then
-                                if obj:FindFirstChildOfClass("UICorner") then
-                                    return obj
-                                end
-                                if obj.Name:lower():find("toggle") or 
-                                   obj.Name:lower():find("button") or
-                                   obj.Name:lower():find("minimize") then
-                                    return obj
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-            
-            return nil
-        end
-        
-        local toggleButton = findLibraryToggleButton()
-        
-        if not toggleButton then
-            print("[Sakura] Warning: Library toggle button not found")
-            return
-        end
-        
-        print("[Sakura] Found library toggle button: " .. toggleButton.Name)
-        
-        -- Переменные для перетаскивания
-        local dragging = false
-        local dragInput
-        local dragStart
-        local startPos
-        local clickStartTime = 0
-        local clickThreshold = 0.15 -- Время для различия клика и драга
-        
-        local function updatePosition(input)
-            local delta = input.Position - dragStart
-            toggleButton.Position = UDim2.new(
-                startPos.X.Scale,
-                startPos.X.Offset + delta.X,
-                startPos.Y.Scale,
-                startPos.Y.Offset + delta.Y
-            )
-        end
-        
-        -- Обработка начала ввода
-        toggleButton.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 or 
-               input.UserInputType == Enum.UserInputType.Touch then
-                clickStartTime = tick()
-                dragging = true
-                dragStart = input.Position
-                startPos = toggleButton.Position
-                
-                input.Changed:Connect(function()
-                    if input.UserInputState == Enum.UserInputState.End then
-                        dragging = false
-                        
-                        -- Проверяем был ли это клик или драг
-                        local clickDuration = tick() - clickStartTime
-                        if clickDuration < clickThreshold then
-                            -- Это был быстрый клик - не блокируем действие кнопки
-                            -- (библиотека обработает клик сама)
-                        end
-                    end
-                end)
-            end
-        end)
-        
-        -- Обработка изменения ввода
-        toggleButton.InputChanged:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseMovement or 
-               input.UserInputType == Enum.UserInputType.Touch then
-                dragInput = input
-            end
-        end)
-        
-        -- Обновление позиции при движении
-        UserInputService.InputChanged:Connect(function(input)
-            if input == dragInput and dragging then
-                local clickDuration = tick() - clickStartTime
-                -- Начинаем перетаскивать только если прошло больше времени чем порог клика
-                if clickDuration > clickThreshold then
-                    updatePosition(input)
-                end
-            end
-        end)
-        
-        print("[Sakura] Library toggle button is now draggable! 🔪")
-    end
-    
-    makeLibraryButtonDraggable()
-end)
--- ===== КОНЕЦ КОДА ПЕРЕТАСКИВАНИЯ КРУГЛОЙ КНОПКИ =====
+-- Native library minimize button is kept untouched.
 
 Themes = {
     Light = {
@@ -278,7 +142,7 @@ Themes = {
     },
 }
 
-Window:SetTheme(Themes.Light)
+Window:SetTheme(Themes.Dark)
 
 MainTab = Window:AddTab({
     Title = 'Combat',
@@ -6687,375 +6551,126 @@ UserInputService.InputBegan:Connect(function(g)
 end)
 
 
--- ===== СИСТЕМА ПЕРЕТАСКИВАНИЯ ГЛАВНОГО МЕНЮ =====
--- Добавляем функционал перетаскивания для главного окна библиотеки
+-- ===== УЛУЧШЕННОЕ ПЕРЕТАСКИВАНИЕ ГЛАВНОГО МЕНЮ =====
+-- Ищем именно окно с заголовком Sakura Project, а не случайный Frame по размеру.
 task.spawn(function()
-    task.wait(1.5) -- Увеличиваем задержку для загрузки UI
-    
-    local UserInputService = game:GetService("UserInputService")
-    
-    local function makeWindowDraggable(windowFrame)
-        if not windowFrame then 
-            print("[Sakura] ERROR: windowFrame is nil")
-            return 
-        end
-        
-        print("[Sakura] Making window draggable: " .. windowFrame.Name)
-        print("[Sakura] Window size: " .. tostring(windowFrame.Size))
-        print("[Sakura] Window position: " .. tostring(windowFrame.Position))
-        
-        local dragging = false
-        local dragInput
-        local dragStart
-        local startPos
-        
-        local function update(input)
-            local delta = input.Position - dragStart
-            windowFrame.Position = UDim2.new(
-                startPos.X.Scale,
-                startPos.X.Offset + delta.X,
-                startPos.Y.Scale,
-                startPos.Y.Offset + delta.Y
-            )
-        end
-        
-        windowFrame.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 or 
-               input.UserInputType == Enum.UserInputType.Touch then
-                dragging = true
-                dragStart = input.Position
-                startPos = windowFrame.Position
-                print("[Sakura] Started dragging main window")
-                
-                input.Changed:Connect(function()
-                    if input.UserInputState == Enum.UserInputState.End then
-                        dragging = false
-                        print("[Sakura] Stopped dragging main window")
-                    end
-                end)
-            end
-        end)
-        
-        windowFrame.InputChanged:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseMovement or 
-               input.UserInputType == Enum.UserInputType.Touch then
-                dragInput = input
-            end
-        end)
-        
-        UserInputService.InputChanged:Connect(function(input)
-            if input == dragInput and dragging then
-                update(input)
-            end
-        end)
-        
-        print("[Sakura] ✅ Main window is now draggable!")
-    end
-    
-    -- Улучшенный поиск главного окна
+    task.wait(0.8)
+
+    local UIS = game:GetService("UserInputService")
+    local Players = game:GetService("Players")
+    local CoreGui = game:GetService("CoreGui")
+    local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+
     local function findMainWindow()
-        print("[Sakura] Searching for main window...")
-        
-        local player = game:GetService("Players").LocalPlayer
-        local playerGui = player:WaitForChild("PlayerGui")
-        local coreGui = game:GetService("CoreGui")
-        
-        local candidates = {}
-        
-        -- Ищем во всех GUI
-        local function searchInGui(gui, location)
-            for _, obj in pairs(gui:GetDescendants()) do
-                if obj:IsA("Frame") then
+        local roots = {playerGui, CoreGui}
+        local best, bestScore = nil, -math.huge
+
+        for _, root in ipairs(roots) do
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("Frame") and obj.Visible then
+                    local score = 0
                     local size = obj.AbsoluteSize
-                    -- Ищем большие фреймы (главное окно обычно большое)
-                    if size.X > 400 and size.Y > 300 then
-                        table.insert(candidates, {
-                            frame = obj,
-                            location = location,
-                            size = size,
-                            name = obj.Name,
-                            score = 0
-                        })
-                    end
-                end
-            end
-        end
-        
-        -- Поиск в PlayerGui
-        for _, gui in pairs(playerGui:GetChildren()) do
-            if gui:IsA("ScreenGui") then
-                searchInGui(gui, "PlayerGui")
-            end
-        end
-        
-        -- Поиск в CoreGui (кроме нашей кнопки)
-        for _, gui in pairs(coreGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Name ~= "SakuraMenuButton" then
-                searchInGui(gui, "CoreGui")
-            end
-        end
-        
-        print("[Sakura] Found " .. #candidates .. " candidate windows")
-        
-        -- Оцениваем кандидатов
-        for _, candidate in pairs(candidates) do
-            local frame = candidate.frame
-            local score = 0
-            
-            -- Бонус за размер близкий к 700x500 (наш размер окна)
-            local sizeDiffX = math.abs(frame.AbsoluteSize.X - 700)
-            local sizeDiffY = math.abs(frame.AbsoluteSize.Y - 500)
-            if sizeDiffX < 100 and sizeDiffY < 100 then
-                score = score + 10
-            end
-            
-            -- Бонус за название
-            local nameLower = frame.Name:lower()
-            if nameLower:find("window") then score = score + 5 end
-            if nameLower:find("main") then score = score + 5 end
-            if nameLower:find("container") then score = score + 3 end
-            if nameLower:find("frame") then score = score + 2 end
-            
-            -- Бонус за видимость
-            if frame.Visible then score = score + 3 end
-            
-            -- Бонус за наличие дочерних элементов (вкладок, кнопок)
-            local childCount = #frame:GetChildren()
-            if childCount > 5 then score = score + 5 end
-            if childCount > 10 then score = score + 3 end
-            
-            candidate.score = score
-            
-            print(string.format("[Sakura] Candidate: %s (Size: %dx%d, Score: %d, Location: %s)", 
-                frame.Name, 
-                math.floor(frame.AbsoluteSize.X), 
-                math.floor(frame.AbsoluteSize.Y),
-                score,
-                candidate.location
-            ))
-        end
-        
-        -- Сортируем по баллам
-        table.sort(candidates, function(a, b) return a.score > b.score end)
-        
-        -- Возвращаем лучший кандидат
-        if #candidates > 0 then
-            local best = candidates[1]
-            print("[Sakura] Selected window: " .. best.name .. " (Score: " .. best.score .. ")")
-            return best.frame
-        end
-        
-        print("[Sakura] ❌ No suitable window found")
-        return nil
-    end
-    
-    local mainWindow = findMainWindow()
-    if mainWindow then
-        makeWindowDraggable(mainWindow)
-    else
-        warn("[Sakura] WARNING: Main window not found for dragging!")
-        warn("[Sakura] Please check console (F9) for debug info")
-    end
-end)
 
+                    if size.X >= 600 and size.Y >= 400 then score += 5 end
+                    if obj.Name:lower():find("window") then score += 3 end
+                    if obj.Name:lower():find("main") then score += 2 end
 
--- ===== КНОПКА ОТКРЫТИЯ/ЗАКРЫТИЯ МЕНЮ =====
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SakuraMenuButton"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-local MenuButton = Instance.new("TextButton")
-MenuButton.Name = "MenuButton"
-MenuButton.Parent = ScreenGui
-MenuButton.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
-MenuButton.BackgroundTransparency = 0.3
-MenuButton.BorderSizePixel = 0
-MenuButton.Position = UDim2.new(0.5, -60, 0.05, 0)
-MenuButton.Size = UDim2.new(0, 120, 0, 40)
-MenuButton.Font = Enum.Font.GothamBold
-MenuButton.Text = "🌸 Menu"
-MenuButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-MenuButton.TextSize = 18
-MenuButton.TextStrokeTransparency = 0.5
-
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 10)
-UICorner.Parent = MenuButton
-
-local UIStroke = Instance.new("UIStroke")
-UIStroke.Color = Color3.fromRGB(255, 105, 180)
-UIStroke.Thickness = 2
-UIStroke.Parent = MenuButton
-
-local UIGradient = Instance.new("UIGradient")
-UIGradient.Color = ColorSequence.new{
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 192, 203)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 182, 193)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 192, 203))
-}
-UIGradient.Rotation = 90
-UIGradient.Parent = MenuButton
-
-ScreenGui.Parent = game:GetService("CoreGui")
-
--- Функционал перемещения кнопки меню
-local buttonDragging = false
-local buttonDragInput
-local buttonDragStart
-local buttonStartPos
-
-local function updateButtonPosition(input)
-    local delta = input.Position - buttonDragStart
-    MenuButton.Position = UDim2.new(
-        buttonStartPos.X.Scale,
-        buttonStartPos.X.Offset + delta.X,
-        buttonStartPos.Y.Scale,
-        buttonStartPos.Y.Offset + delta.Y
-    )
-end
-
-MenuButton.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or 
-       input.UserInputType == Enum.UserInputType.Touch then
-        buttonDragging = true
-        buttonDragStart = input.Position
-        buttonStartPos = MenuButton.Position
-        
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                buttonDragging = false
-            end
-        end)
-    end
-end)
-
-MenuButton.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or 
-       input.UserInputType == Enum.UserInputType.Touch then
-        buttonDragInput = input
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if input == buttonDragInput and buttonDragging then
-        updateButtonPosition(input)
-    end
-end)
-
--- Логика открытия/закрытия меню
-local menuVisible = true
-local clickStartTime = 0
-local clickThreshold = 0.2 -- Время в секундах для различия между кликом и перетаскиванием
-
-MenuButton.MouseButton1Down:Connect(function()
-    clickStartTime = tick()
-end)
-
-MenuButton.MouseButton1Up:Connect(function()
-    local clickDuration = tick() - clickStartTime
-    
-    -- Если это был быстрый клик (не перетаскивание)
-    if clickDuration < clickThreshold and not buttonDragging then
-        task.spawn(function()
-            -- Ищем главное окно
-            local function findAndToggleWindow()
-                local player = game:GetService("Players").LocalPlayer
-                local playerGui = player:WaitForChild("PlayerGui")
-                
-                -- Пробуем найти в PlayerGui
-                for _, gui in pairs(playerGui:GetChildren()) do
-                    if gui:IsA("ScreenGui") then
-                        for _, frame in pairs(gui:GetDescendants()) do
-                            if frame:IsA("Frame") and (frame.Name:find("Window") or 
-                               frame.Name:find("Main") or frame.Size.X.Offset > 500) then
-                                frame.Visible = not frame.Visible
-                                menuVisible = frame.Visible
-                                
-                                -- Обновляем текст кнопки
-                                if menuVisible then
-                                    MenuButton.Text = "🌸 Menu"
-                                    MenuButton.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
-                                else
-                                    MenuButton.Text = "✕ Close"
-                                    MenuButton.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
-                                end
-                                return true
-                            end
+                    for _, child in ipairs(obj:GetDescendants()) do
+                        if child:IsA("TextLabel") and child.Text == "Sakura Project" then
+                            score += 20
+                            break
                         end
                     end
-                end
-                
-                -- Пробуем в CoreGui
-                local coreGui = game:GetService("CoreGui")
-                for _, gui in pairs(coreGui:GetChildren()) do
-                    if gui:IsA("ScreenGui") and gui.Name ~= "SakuraMenuButton" then
-                        for _, frame in pairs(gui:GetDescendants()) do
-                            if frame:IsA("Frame") and (frame.Name:find("Window") or 
-                               frame.Name:find("Main") or frame.Size.X.Offset > 500) then
-                                frame.Visible = not frame.Visible
-                                menuVisible = frame.Visible
-                                
-                                -- Обновляем текст кнопки
-                                if menuVisible then
-                                    MenuButton.Text = "🌸 Menu"
-                                    MenuButton.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
-                                else
-                                    MenuButton.Text = "✕ Close"
-                                    MenuButton.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
-                                end
-                                return true
-                            end
-                        end
-                    end
-                end
-                
-                return false
-            end
-            
-            if not findAndToggleWindow() then
-                -- Fallback: используем Window.Toggle если доступен
-                if Window and Window.Toggle then
-                    Window:Toggle()
-                    menuVisible = not menuVisible
-                    
-                    if menuVisible then
-                        MenuButton.Text = "🌸 Menu"
-                        MenuButton.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
-                    else
-                        MenuButton.Text = "✕ Close"
-                        MenuButton.Text = "✕ Close"
-                        MenuButton.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+
+                    if score > bestScore then
+                        bestScore = score
+                        best = obj
                     end
                 end
             end
-        end)
+        end
+
+        return best
     end
-end)
 
--- Анимация при наведении
-MenuButton.MouseEnter:Connect(function()
-    if not buttonDragging then
-        game:GetService("TweenService"):Create(
-            MenuButton,
-            TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            {BackgroundTransparency = 0.1, Size = UDim2.new(0, 130, 0, 45)}
-        ):Play()
+    local windowFrame = findMainWindow()
+    if not windowFrame then
+        warn("[Sakura] Main window not found for UI enhancement")
+        return
     end
+
+    -- Фиксируем новый удобный размер.
+    windowFrame.Size = UDim2.fromOffset(900, 620)
+
+    local constraint = windowFrame:FindFirstChild("SakuraSizeConstraint")
+    if not constraint then
+        constraint = Instance.new("UISizeConstraint")
+        constraint.Name = "SakuraSizeConstraint"
+        constraint.MinSize = Vector2.new(720, 480)
+        constraint.MaxSize = Vector2.new(1200, 820)
+        constraint.Parent = windowFrame
+    end
+
+    -- Перетаскивание только за верхнюю часть окна, чтобы кнопки/переключатели не мешали.
+    local dragHandle = nil
+    for _, obj in ipairs(windowFrame:GetDescendants()) do
+        if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text == "Sakura Project" then
+            dragHandle = obj.Parent
+            break
+        end
+    end
+    dragHandle = dragHandle or windowFrame
+
+    local dragging = false
+    local dragStart
+    local startPos
+    local dragInput
+
+    local function update(input)
+        local delta = input.Position - dragStart
+        windowFrame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = windowFrame.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    dragHandle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if dragging and input == dragInput then
+            update(input)
+        end
+    end)
+
+    print("[Sakura] UI improved: 900x620 + draggable title bar + size limits")
 end)
 
-MenuButton.MouseLeave:Connect(function()
-    game:GetService("TweenService"):Create(
-        MenuButton,
-        TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {BackgroundTransparency = 0.3, Size = UDim2.new(0, 120, 0, 40)}
-    ):Play()
-end)
-
--- Уведомление об успешной загрузке
+-- Pink "🌸 Menu" button removed: the library's own minimize button + LeftAlt keybind are enough.
 task.wait(1)
 Window:Notify({
     Title = 'Sakura Project ✅',
-    Description = 'Script loaded! Main window & button are draggable.',
+    Description = 'UI improved: larger window, draggable title bar and cleaner layout.',
     Duration = 5,
 })
