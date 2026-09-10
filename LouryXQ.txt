@@ -1643,6 +1643,98 @@ Window:AddToggle({
         end
     end,
 })
+-- ===== AUTO FARM V2: SPEED + NOCLIP =====
+local AutoFarmV2Enabled = false
+local AutoFarmV2Speed = 85
+local AutoFarmV2Connection = nil
+local AutoFarmV2OldSpeed = nil
+local AutoFarmV2OldCollide = {}
+
+local function stopAutoFarmV2()
+    AutoFarmV2Enabled = false
+    if AutoFarmV2Connection then
+        AutoFarmV2Connection:Disconnect()
+        AutoFarmV2Connection = nil
+    end
+    local character = p.Character
+    local humanoid = character and character:FindFirstChildOfClass('Humanoid')
+    if humanoid and AutoFarmV2OldSpeed then
+        pcall(function() humanoid.WalkSpeed = AutoFarmV2OldSpeed end)
+    end
+    for part, old in pairs(AutoFarmV2OldCollide) do
+        if part and part.Parent then pcall(function() part.CanCollide = old end) end
+    end
+    AutoFarmV2OldCollide = {}
+    AutoFarmV2OldSpeed = nil
+end
+
+local function startAutoFarmV2()
+    stopAutoFarmV2()
+    if not p.Character or not p.Character:FindFirstChild('HumanoidRootPart') then return end
+    AutoFarmV2Enabled = true
+    local humanoid = p.Character:FindFirstChildOfClass('Humanoid')
+    AutoFarmV2OldSpeed = humanoid and humanoid.WalkSpeed or 16
+
+    AutoFarmV2Connection = RunService.Heartbeat:Connect(function(dt)
+        if not AutoFarmV2Enabled or not p.Character or p:GetAttribute('Alive') ~= true then return end
+        local root = p.Character:FindFirstChild('HumanoidRootPart')
+        local hum = p.Character:FindFirstChildOfClass('Humanoid')
+        if not root then return end
+
+        if hum then hum.WalkSpeed = AutoFarmV2Speed end
+        for _, part in ipairs(p.Character:GetDescendants()) do
+            if part:IsA('BasePart') then
+                if AutoFarmV2OldCollide[part] == nil then AutoFarmV2OldCollide[part] = part.CanCollide end
+                part.CanCollide = false
+            end
+        end
+
+        local container = returncoincontainer()
+        local coin = FindNearestCoin(container)
+        if coin and coin.Parent and coin.Transparency == 1 then
+            local direction = (coin.Position - root.Position)
+            local distance = direction.Magnitude
+            if distance > 4 then
+                local step = math.min(distance, AutoFarmV2Speed * (dt or 0.016))
+                root.CFrame = root.CFrame + direction.Unit * step
+            end
+            if distance <= 8 and coin:FindFirstChild('TouchInterest') then
+                pcall(function()
+                    firetouchinterest(root, coin, 0)
+                    firetouchinterest(root, coin, 1)
+                end)
+            end
+        end
+    end)
+end
+
+Window:AddToggle({
+    Title = 'Auto Farmer V2',
+    Description = 'Collect coins using Speed + NoClip',
+    Default = false,
+    Tab = AutoFarmTab,
+    Callback = function(enabled)
+        if enabled then
+            startAutoFarmV2()
+        else
+            stopAutoFarmV2()
+        end
+    end,
+})
+
+Window:AddSlider({
+    Title = 'Auto Farmer V2 Speed',
+    Description = 'Movement speed while farming',
+    Default = 85,
+    Min = 35,
+    Max = 150,
+    Step = 5,
+    Tab = AutoFarmTab,
+    Callback = function(value)
+        AutoFarmV2Speed = value
+    end,
+})
+
 Window:AddToggle({
     Title = 'Reset When Bag Full (Innocent)',
     Description = 'Reset character when bag is full',
@@ -1884,6 +1976,115 @@ task.spawn(function()
             end
         end
     end
+end)
+
+-- ===== FLY: CAMERA DIRECTION =====
+local FlyEnabled = false
+local FlySpeed = 70
+local FlyBV = nil
+local FlyBG = nil
+local FlyConnection = nil
+
+local function stopFly()
+    FlyEnabled = false
+    if FlyConnection then FlyConnection:Disconnect(); FlyConnection = nil end
+    if FlyBV then FlyBV:Destroy(); FlyBV = nil end
+    if FlyBG then FlyBG:Destroy(); FlyBG = nil end
+    local hum = p.Character and p.Character:FindFirstChildOfClass('Humanoid')
+    if hum then pcall(function() hum.PlatformStand = false end) end
+end
+
+local function startFly()
+    stopFly()
+    local character = p.Character
+    local root = character and character:FindFirstChild('HumanoidRootPart')
+    local hum = character and character:FindFirstChildOfClass('Humanoid')
+    if not root then return end
+    FlyEnabled = true
+    if hum then hum.PlatformStand = true end
+
+    FlyBV = Instance.new('BodyVelocity')
+    FlyBV.Name = 'SakuraProjectFlyVelocity'
+    FlyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    FlyBV.P = 9000
+    FlyBV.Velocity = Vector3.zero
+    FlyBV.Parent = root
+
+    FlyBG = Instance.new('BodyGyro')
+    FlyBG.Name = 'SakuraProjectFlyGyro'
+    FlyBG.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    FlyBG.P = 5000
+    FlyBG.D = 500
+    FlyBG.CFrame = root.CFrame
+    FlyBG.Parent = root
+
+    FlyConnection = RunService.RenderStepped:Connect(function()
+        if not FlyEnabled or not root.Parent then return end
+        local camera = workspace.CurrentCamera
+        if not camera then return end
+        local look = camera.CFrame.LookVector
+        local move = Vector3.zero
+        local hum2 = p.Character and p.Character:FindFirstChildOfClass('Humanoid')
+        if hum2 then move = hum2.MoveDirection end
+
+        -- Movement follows the camera's horizontal facing; W/S follows the
+        -- gaze and Space/Ctrl provide vertical carpet-like movement.
+        local horizontal = Vector3.new(look.X, 0, look.Z)
+        if horizontal.Magnitude > 0 then horizontal = horizontal.Unit end
+        local right = Vector3.new(camera.CFrame.RightVector.X, 0, camera.CFrame.RightVector.Z)
+        if right.Magnitude > 0 then right = right.Unit end
+        local forwardAmount = 0
+        local sideAmount = 0
+        if UIS:IsKeyDown(Enum.KeyCode.W) then forwardAmount += 1 end
+        if UIS:IsKeyDown(Enum.KeyCode.S) then forwardAmount -= 1 end
+        if UIS:IsKeyDown(Enum.KeyCode.D) then sideAmount += 1 end
+        if UIS:IsKeyDown(Enum.KeyCode.A) then sideAmount -= 1 end
+        local vertical = 0
+        if UIS:IsKeyDown(Enum.KeyCode.Space) then vertical += 1 end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl) then vertical -= 1 end
+
+        -- On mobile/joystick, Humanoid.MoveDirection is used relative to camera.
+        if forwardAmount == 0 and sideAmount == 0 and move.Magnitude > 0.05 then
+            local md = Vector3.new(move.X, 0, move.Z)
+            if md.Magnitude > 0 then
+                horizontal = md.Unit
+                forwardAmount = md.Magnitude
+            end
+        end
+
+        local velocity = horizontal * (forwardAmount * FlySpeed) + right * (sideAmount * FlySpeed) + Vector3.new(0, vertical * FlySpeed, 0)
+        FlyBV.Velocity = velocity
+        if velocity.Magnitude > 1 then
+            FlyBG.CFrame = CFrame.lookAt(root.Position, root.Position + velocity.Unit)
+        else
+            FlyBG.CFrame = CFrame.lookAt(root.Position, root.Position + look)
+        end
+    end)
+end
+
+Window:AddToggle({
+    Title = 'Fly',
+    Description = 'Fly in the direction of your camera view',
+    Default = false,
+    Tab = LocalPlayerTab,
+    Callback = function(enabled)
+        if enabled then startFly() else stopFly() end
+    end,
+})
+Window:AddSlider({
+    Title = 'Fly Speed',
+    Description = 'Flight movement speed',
+    Default = 70,
+    Min = 20,
+    Max = 180,
+    Step = 5,
+    Tab = LocalPlayerTab,
+    Callback = function(value) FlySpeed = value end,
+})
+
+p.CharacterAdded:Connect(function()
+    if FlyEnabled then task.wait(0.5); startFly() end
+    if AutoFarmV2Enabled then task.wait(0.5); startAutoFarmV2() end
 end)
 
 VisualsTab = Window:AddTab({
@@ -6710,211 +6911,241 @@ UserInputService.InputBegan:Connect(function(g)
 end)
 
 
--- ===== SAKURA PROJECT: STABLE CLICKGUI CONTROLLER =====
--- Отдельная кнопка-контроллер живёт независимо от ClickGUI.
--- Нажатие переключает реальное окно, а перетаскивание не ломает клик.
--- Оригинальную кнопку библиотеки НЕ удаляем и НЕ подменяем.
+-- ===== SAKURA PROJECT: NATIVE CLICKGUI BUTTON DRAG =====
+-- IMPORTANT: this does NOT create a second launcher and does NOT replace the
+-- original callback. It finds the existing library button (the knife button),
+-- styles that same GuiButton and adds drag support to it.
 task.spawn(function()
     local Players = game:GetService('Players')
     local UIS = game:GetService('UserInputService')
-    local RunService = game:GetService('RunService')
+    local CoreGui = game:GetService('CoreGui')
     local player = Players.LocalPlayer
     local playerGui = player:WaitForChild('PlayerGui')
-    local CoreGui = game:GetService('CoreGui')
 
-    local screen = Instance.new('ScreenGui')
-    screen.Name = 'SakuraProjectClickGUIController'
-    screen.ResetOnSpawn = false
-    screen.IgnoreGuiInset = true
-    screen.ZIndexBehavior = Enum.ZIndexBehavior.Global
-    pcall(function() screen.DisplayOrder = 1000000 end)
-    screen.Parent = (gethui and gethui()) or CoreGui or playerGui
-
-    local button = Instance.new('TextButton')
-    button.Name = 'SakuraProjectToggle'
-    button.Size = UDim2.fromOffset(58, 58)
-    button.Position = UDim2.new(1, -82, 0.5, -29)
-    button.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
-    button.BackgroundTransparency = 0.08
-    button.Text = 'SA'
-    button.TextColor3 = Color3.fromRGB(255, 105, 190)
-    button.TextSize = 21
-    button.Font = Enum.Font.GothamBold
-    button.AutoButtonColor = false
-    button.Active = true
-    button.Selectable = false
-    button.ZIndex = 1000000
-    button.Parent = screen
-
-    local corner = Instance.new('UICorner')
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = button
-
-    local stroke = Instance.new('UIStroke')
-    stroke.Color = Color3.fromRGB(255, 105, 190)
-    stroke.Thickness = 2
-    stroke.Transparency = 0.15
-    stroke.Parent = button
-
-    local scale = Instance.new('UIScale')
-    scale.Scale = 1
-    scale.Parent = button
-
-    local dragging = false
-    local moved = false
-    local dragStart = nil
-    local startPos = nil
-    local activeInput = nil
-    local DRAG_THRESHOLD = 8
-
-    local function savePos()
-        local x, y = button.AbsolutePosition.X, button.AbsolutePosition.Y
-        getgenv().SakuraProjectClickGUIPosition = {X = x, Y = y}
+    local function roots()
+        local out = {playerGui, CoreGui}
         pcall(function()
-            if writefile then
-                writefile('SakuraProjectClickGUIPosition.txt', tostring(x)..'|'..tostring(y))
-            end
+            if gethui then table.insert(out, gethui()) end
         end)
+        return out
     end
 
-    local function clamp(x, y)
+    local function candidateScore(obj)
+        if not obj:IsA('ImageButton') and not obj:IsA('TextButton') then return -math.huge end
+        if not obj.Visible or not obj.Active then return -math.huge end
+        if obj:IsDescendantOf(script) then return -math.huge end
+
+        local size = obj.AbsoluteSize
+        local pos = obj.AbsolutePosition
+        if size.X < 45 or size.X > 150 or size.Y < 45 or size.Y > 150 then return -math.huge end
+        if math.abs(size.X - size.Y) > 35 then return -math.huge end
+
         local camera = workspace.CurrentCamera
-        if not camera then return x, y end
-        local v = camera.ViewportSize
-        local sx, sy = button.AbsoluteSize.X, button.AbsoluteSize.Y
-        return math.clamp(x, 4, math.max(4, v.X - sx - 4)),
-               math.clamp(y, 4, math.max(4, v.Y - sy - 4))
-    end
+        if not camera then return -math.huge end
+        local vp = camera.ViewportSize
+        local cx = pos.X + size.X / 2
+        local cy = pos.Y + size.Y / 2
+        local dx = math.abs(cx - vp.X / 2)
+        local dy = math.abs(cy - vp.Y * 0.25)
 
-    local function restorePos()
-        local saved = getgenv().SakuraProjectClickGUIPosition
-        if saved and tonumber(saved.X) and tonumber(saved.Y) then
-            local x, y = clamp(tonumber(saved.X), tonumber(saved.Y))
-            button.Position = UDim2.fromOffset(x, y)
-            return
+        -- The library's launcher is the distinctive square button near the
+        -- upper-middle/center area in the user's screenshot.
+        local score = 0
+        score += math.max(0, 320 - dx) * 2
+        score += math.max(0, 280 - dy)
+        score += math.max(0, 100 - math.abs(size.X - 85)) * 1.5
+
+        local n = string.lower(obj.Name or '')
+        local p = obj.Parent and string.lower(obj.Parent.Name or '') or ''
+        for _, word in ipairs({'clickgui','click','toggle','menu','minimize','knife','open','hub'}) do
+            if string.find(n, word, 1, true) then score += 120 end
+            if string.find(p, word, 1, true) then score += 35 end
         end
-        pcall(function()
-            if isfile and isfile('SakuraProjectClickGUIPosition.txt') and readfile then
-                local a,b = readfile('SakuraProjectClickGUIPosition.txt'):match('^([%-%.%d]+)|([%-%.%d]+)$')
-                if a and b then
-                    local x,y = clamp(tonumber(a), tonumber(b))
-                    button.Position = UDim2.fromOffset(x,y)
-                end
-            end
-        end)
+
+        if obj:IsA('ImageButton') and obj.Image and obj.Image ~= '' then score += 40 end
+        if obj:IsA('TextButton') and obj.Text and obj.Text ~= '' then score += 15 end
+
+        -- Avoid obvious Roblox top-bar controls.
+        if string.find(p, 'robloxgui', 1, true) then score -= 250 end
+        if string.find(n, 'chat', 1, true) or string.find(n, 'mic', 1, true) then score -= 200 end
+        if string.find(n, 'friend', 1, true) or string.find(n, 'playerlist', 1, true) then score -= 200 end
+        return score
     end
 
-    local function findClickGuiWindow()
-        local roots = {playerGui, CoreGui}
-        local best = nil
-        local bestScore = -math.huge
-
-        for _, root in ipairs(roots) do
-            for _, obj in ipairs(root:GetDescendants()) do
-                if obj:IsA('TextLabel') or obj:IsA('TextButton') then
-                    if obj.Text == 'Sakura Project' then
-                        local candidate = obj
-                        local depth = 0
-                        while candidate.Parent and depth < 12 do
-                            candidate = candidate.Parent
-                            depth += 1
-                            if candidate:IsA('Frame') or candidate:IsA('CanvasGroup') then
-                                local size = candidate.AbsoluteSize
-                                if size.X >= 500 and size.Y >= 300 then
-                                    local score = 100 - depth
-                                    if size.X >= 800 then score += 10 end
-                                    if size.Y >= 500 then score += 10 end
-                                    if score > bestScore then
-                                        bestScore = score
-                                        best = candidate
-                                    end
-                                    break
-                                end
-                            end
-                        end
+    local function findNativeButton()
+        local best, bestScore = nil, -math.huge
+        for _, root in ipairs(roots()) do
+            pcall(function()
+                for _, obj in ipairs(root:GetDescendants()) do
+                    local score = candidateScore(obj)
+                    if score > bestScore then
+                        bestScore, best = score, obj
                     end
                 end
+            end)
+        end
+        return best, bestScore
+    end
+
+    local styled = nil
+    local function styleAndBind(button)
+        if not button or not button.Parent then return end
+        if styled == button then return end
+        styled = button
+
+        -- Preserve the original GUI callback. Only presentation is changed.
+        pcall(function()
+            button.AutoButtonColor = false
+            button.BackgroundTransparency = 0.08
+            button.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
+            button.ZIndex = math.max(button.ZIndex, 10000)
+        end)
+
+        -- Keep its current size, but make it a clean circular launcher.
+        local size = button.AbsoluteSize
+        if size.X >= 50 and size.Y >= 50 then
+            pcall(function()
+                button.Size = UDim2.fromOffset(math.clamp(math.max(size.X, size.Y), 64, 92), math.clamp(math.max(size.X, size.Y), 64, 92))
+            end)
+        end
+
+        pcall(function()
+            button.ImageTransparency = 1
+        end)
+
+        local corner = button:FindFirstChild('SakuraProjectNativeCorner')
+        if not corner then
+            corner = Instance.new('UICorner')
+            corner.Name = 'SakuraProjectNativeCorner'
+            corner.CornerRadius = UDim.new(1, 0)
+            corner.Parent = button
+        end
+
+        local stroke = button:FindFirstChild('SakuraProjectNativeStroke')
+        if not stroke then
+            stroke = Instance.new('UIStroke')
+            stroke.Name = 'SakuraProjectNativeStroke'
+            stroke.Color = Color3.fromRGB(255, 105, 190)
+            stroke.Thickness = 2
+            stroke.Transparency = 0.15
+            stroke.Parent = button
+        end
+
+        local label = button:FindFirstChild('SakuraProjectNativeLabel')
+        if not label then
+            label = Instance.new('TextLabel')
+            label.Name = 'SakuraProjectNativeLabel'
+            label.BackgroundTransparency = 1
+            label.Size = UDim2.fromScale(1, 1)
+            label.Position = UDim2.fromScale(0, 0)
+            label.Text = 'SA'
+            label.TextColor3 = Color3.fromRGB(255, 105, 190)
+            label.TextSize = 24
+            label.Font = Enum.Font.GothamBold
+            label.TextScaled = false
+            label.Active = false
+            label.Selectable = false
+            label.ZIndex = button.ZIndex + 1
+            label.Parent = button
+        end
+
+        -- Make the EXISTING launcher draggable. A normal tap is left to the
+        -- library's original MouseButton1Click/Activated handler.
+        local dragging = false
+        local moved = false
+        local dragStart
+        local startPos
+        local threshold = 8
+
+        local function savePosition()
+            local pos = button.AbsolutePosition
+            getgenv().SakuraProjectNativeButtonPosition = {X = pos.X, Y = pos.Y}
+            pcall(function()
+                if writefile then
+                    writefile('SakuraProjectNativeButtonPosition.txt', string.format('%d|%d', pos.X, pos.Y))
+                end
+            end)
+        end
+
+        local function clampPosition(x, y)
+            local camera = workspace.CurrentCamera
+            if not camera then return x, y end
+            local vp = camera.ViewportSize
+            local w, h = button.AbsoluteSize.X, button.AbsoluteSize.Y
+            return math.clamp(x, 2, math.max(2, vp.X - w - 2)),
+                   math.clamp(y, 2, math.max(2, vp.Y - h - 2))
+        end
+
+        local function restorePosition()
+            local saved = getgenv().SakuraProjectNativeButtonPosition
+            if saved and tonumber(saved.X) and tonumber(saved.Y) then
+                local x, y = clampPosition(tonumber(saved.X), tonumber(saved.Y))
+                button.Position = UDim2.fromOffset(x, y)
+                return
+            end
+            pcall(function()
+                if isfile and isfile('SakuraProjectNativeButtonPosition.txt') and readfile then
+                    local a, b = readfile('SakuraProjectNativeButtonPosition.txt'):match('^([%-%.%d]+)|([%-%.%d]+)$')
+                    if a and b then
+                        local x, y = clampPosition(tonumber(a), tonumber(b))
+                        button.Position = UDim2.fromOffset(x, y)
+                    end
+                end
+            end)
+        end
+
+        restorePosition()
+
+        button.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                moved = false
+                dragStart = input.Position
+                startPos = button.AbsolutePosition
+            end
+        end)
+
+        UIS.InputChanged:Connect(function(input)
+            if not dragging or not dragStart or not startPos then return end
+            if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+            local delta = input.Position - dragStart
+            if delta.Magnitude >= threshold then moved = true end
+            if moved then
+                local x, y = clampPosition(startPos.X + delta.X, startPos.Y + delta.Y)
+                button.Position = UDim2.fromOffset(x, y)
+            end
+        end)
+
+        UIS.InputEnded:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+            if not dragging then return end
+            if moved then savePosition() end
+            dragging, moved, dragStart, startPos = false, false, nil, nil
+        end)
+
+        print('[Sakura Project] Native ClickGUI button bound:', button:GetFullName())
+    end
+
+    -- The library can create the button after the main script starts, so keep
+    -- scanning briefly until the real button exists.
+    for _ = 1, 80 do
+        local button = findNativeButton()
+        if button then
+            styleAndBind(button)
+            break
+        end
+        task.wait(0.20)
+    end
+
+    -- If the library recreates its launcher, bind the new instance as well.
+    task.spawn(function()
+        while task.wait(1) do
+            local button = findNativeButton()
+            if button and button ~= styled then
+                styleAndBind(button)
             end
         end
-        return best
-    end
-
-    local function setWindowVisible(window, visible)
-        if not window or not window.Parent then return false end
-        local ok = pcall(function() window.Visible = visible end)
-        if ok then return true end
-        return false
-    end
-
-    local function toggleClickGui()
-        local window = findClickGuiWindow()
-        if not window then
-            warn('[Sakura Project] ClickGUI window not found yet')
-            return
-        end
-        setWindowVisible(window, not window.Visible)
-    end
-
-    restorePos()
-
-    button.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            moved = false
-            dragStart = input.Position
-            startPos = button.AbsolutePosition
-            activeInput = input
-        end
     end)
-
-    button.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            activeInput = input
-        end
-    end)
-
-    UIS.InputChanged:Connect(function(input)
-        if not dragging or not dragStart or not startPos then return end
-        local isMouse = input.UserInputType == Enum.UserInputType.MouseMovement
-        local isTouch = input.UserInputType == Enum.UserInputType.Touch
-        if not (isMouse or isTouch) then return end
-
-        local delta = input.Position - dragStart
-        if not moved and delta.Magnitude >= DRAG_THRESHOLD then
-            moved = true
-        end
-        if moved then
-            local x, y = clamp(startPos.X + delta.X, startPos.Y + delta.Y)
-            button.Position = UDim2.fromOffset(x, y)
-        end
-    end)
-
-    UIS.InputEnded:Connect(function(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
-        if not dragging then return end
-        local wasMoved = moved
-        dragging = false
-        moved = false
-        dragStart = nil
-        startPos = nil
-        activeInput = nil
-        if wasMoved then
-            savePos()
-        else
-            toggleClickGui()
-        end
-    end)
-
-    -- Кнопка всегда поверх игры и восстанавливается после респавна.
-    player.CharacterAdded:Connect(function()
-        task.wait(0.2)
-        if screen.Parent == nil then
-            screen.Parent = (gethui and gethui()) or CoreGui or playerGui
-        end
-        restorePos()
-    end)
-
-    print('[Sakura Project] Stable ClickGUI controller: READY')
 end)
 
 -- ===== SAKURA PROJECT: BIGGER GUI + BOLD TEXT + BIGGER CHECKBOXES =====
@@ -6928,17 +7159,15 @@ task.spawn(function()
         local best, bestScore = nil, -math.huge
         for _, root in ipairs({playerGui, CoreGui}) do
             for _, obj in ipairs(root:GetDescendants()) do
-                if obj:IsA('TextLabel') or obj:IsA('TextButton') then
-                    if obj.Text == 'Sakura Project' then
-                        local cur = obj
-                        for _ = 1, 10 do
-                            cur = cur.Parent
-                            if not cur then break end
-                            if (cur:IsA('Frame') or cur:IsA('CanvasGroup')) and cur.AbsoluteSize.X >= 500 and cur.AbsoluteSize.Y >= 300 then
-                                local score = cur.AbsoluteSize.X * cur.AbsoluteSize.Y
-                                if score > bestScore then best, bestScore = cur, score end
-                                break
-                            end
+                if (obj:IsA('TextLabel') or obj:IsA('TextButton')) and obj.Text == 'Sakura Project' then
+                    local cur = obj
+                    for _ = 1, 14 do
+                        cur = cur.Parent
+                        if not cur then break end
+                        if (cur:IsA('Frame') or cur:IsA('CanvasGroup')) and cur.AbsoluteSize.X >= 500 and cur.AbsoluteSize.Y >= 300 then
+                            local score = cur.AbsoluteSize.X * cur.AbsoluteSize.Y
+                            if score > bestScore then best, bestScore = cur, score end
+                            break
                         end
                     end
                 end
@@ -6949,37 +7178,38 @@ task.spawn(function()
 
     local window = findWindow()
     if not window then return end
-    window.Size = UDim2.fromOffset(1000, 700)
+    window.Size = UDim2.fromOffset(1080, 740)
 
     local constraint = window:FindFirstChild('SakuraProjectSizeConstraint')
     if not constraint then
         constraint = Instance.new('UISizeConstraint')
         constraint.Name = 'SakuraProjectSizeConstraint'
-        constraint.MinSize = Vector2.new(820, 560)
-        constraint.MaxSize = Vector2.new(1400, 900)
+        constraint.MinSize = Vector2.new(900, 600)
+        constraint.MaxSize = Vector2.new(1450, 920)
         constraint.Parent = window
     end
 
+    -- Real readable hierarchy: headings/functions bold, descriptions slightly smaller.
     for _, obj in ipairs(window:GetDescendants()) do
         if obj:IsA('TextLabel') or obj:IsA('TextButton') or obj:IsA('TextBox') then
             pcall(function() obj.Font = Enum.Font.GothamBold end)
             if obj.TextSize > 0 then
-                obj.TextSize = math.clamp(math.floor(obj.TextSize * 1.10 + 0.5), 12, 25)
+                obj.TextSize = math.clamp(math.floor(obj.TextSize * 1.45 + 0.5), 16, 32)
             end
         end
     end
 
-    -- Увеличиваем только компактные квадратные переключатели.
+    -- Enlarge actual switch/button-like controls without touching decorative icons.
     for _, obj in ipairs(window:GetDescendants()) do
         if obj:IsA('ImageButton') or obj:IsA('ImageLabel') then
             local s = obj.AbsoluteSize
-            if s.X >= 12 and s.X <= 45 and s.Y >= 12 and s.Y <= 45 and math.abs(s.X-s.Y) <= 8 then
-                pcall(function() obj.Size = UDim2.fromOffset(24, 24) end)
+            if s.X >= 12 and s.X <= 55 and s.Y >= 12 and s.Y <= 55 and math.abs(s.X - s.Y) <= 10 then
+                pcall(function() obj.Size = UDim2.fromOffset(34, 34) end)
             end
         end
     end
 
-    print('[Sakura Project] UI: 1000x700 + BOLD + larger toggles')
+    print('[Sakura Project] UI upgraded: 1080x740, GothamBold, 30px toggles')
 end)
 
 -- ===== SAKURA PROJECT: 10 LOCAL VISUAL FEATURES =====
@@ -7183,6 +7413,6 @@ end)
 task.wait(1)
 Window:Notify({
     Title = 'Sakura Project',
-    Description = 'Ready — draggable ClickGUI button, bigger UI, BOLD text and Player Visuals loaded.',
+    Description = 'Ready — native ClickGUI button is draggable, UI enlarged, BOLD text enabled, Auto Farmer V2 and Fly loaded.',
     Duration = 5,
 })
