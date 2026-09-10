@@ -83,7 +83,7 @@ end
 Window = Library:CreateWindow({
     Title = 'Sakura Project',
     Theme = 'Dark',
-    Size = UDim2.fromOffset(1000, 700),
+    Size = UDim2.fromOffset(1120, 760),
     Transparency = 0.1,
     Blurring = true,
     MinimizeKeybind = Enum.KeyCode.LeftAlt,
@@ -110,7 +110,7 @@ Themes = {
         Component = Color3.fromRGB(40, 40, 40),
         Interactables = Color3.fromRGB(45, 45, 45),
         Tab = Color3.fromRGB(200, 200, 200),
-        Title = Color3.fromRGB(240, 240, 240),
+        Title = Color3.fromRGB(255, 105, 200),
         Description = Color3.fromRGB(200, 200, 200),
         Shadow = Color3.fromRGB(0, 0, 0),
         Outline = Color3.fromRGB(40, 40, 40),
@@ -1643,96 +1643,124 @@ Window:AddToggle({
         end
     end,
 })
--- ===== AUTO FARM V2: SPEED + NOCLIP =====
-local AutoFarmV2Enabled = false
-local AutoFarmV2Speed = 85
-local AutoFarmV2Connection = nil
-local AutoFarmV2OldSpeed = nil
-local AutoFarmV2OldCollide = {}
+-- ===== FARM COIN V2: SAME FARM LOGIC, FASTER TRAVEL =====
+local FarmCoinV2Enabled = false
+local FarmCoinV2Speed = 58
+local FarmCoinV2Connection = nil
+local FarmCoinV2Tween = nil
+local FarmCoinV2Active = false
+local FarmCoinV2Original = {}
 
-local function stopAutoFarmV2()
-    AutoFarmV2Enabled = false
-    if AutoFarmV2Connection then
-        AutoFarmV2Connection:Disconnect()
-        AutoFarmV2Connection = nil
+local function stopFarmCoinV2()
+    FarmCoinV2Enabled = false
+    FarmCoinV2Active = false
+    if FarmCoinV2Connection then
+        FarmCoinV2Connection:Disconnect()
+        FarmCoinV2Connection = nil
+    end
+    if FarmCoinV2Tween then
+        pcall(function() FarmCoinV2Tween:Cancel() end)
+        FarmCoinV2Tween = nil
     end
     local character = p.Character
-    local humanoid = character and character:FindFirstChildOfClass('Humanoid')
-    if humanoid and AutoFarmV2OldSpeed then
-        pcall(function() humanoid.WalkSpeed = AutoFarmV2OldSpeed end)
-    end
-    for part, old in pairs(AutoFarmV2OldCollide) do
-        if part and part.Parent then pcall(function() part.CanCollide = old end) end
-    end
-    AutoFarmV2OldCollide = {}
-    AutoFarmV2OldSpeed = nil
-end
-
-local function startAutoFarmV2()
-    stopAutoFarmV2()
-    if not p.Character or not p.Character:FindFirstChild('HumanoidRootPart') then return end
-    AutoFarmV2Enabled = true
-    local humanoid = p.Character:FindFirstChildOfClass('Humanoid')
-    AutoFarmV2OldSpeed = humanoid and humanoid.WalkSpeed or 16
-
-    AutoFarmV2Connection = RunService.Heartbeat:Connect(function(dt)
-        if not AutoFarmV2Enabled or not p.Character or p:GetAttribute('Alive') ~= true then return end
-        local root = p.Character:FindFirstChild('HumanoidRootPart')
-        local hum = p.Character:FindFirstChildOfClass('Humanoid')
-        if not root then return end
-
-        if hum then hum.WalkSpeed = AutoFarmV2Speed end
-        for _, part in ipairs(p.Character:GetDescendants()) do
-            if part:IsA('BasePart') then
-                if AutoFarmV2OldCollide[part] == nil then AutoFarmV2OldCollide[part] = part.CanCollide end
-                part.CanCollide = false
-            end
-        end
-
-        local container = returncoincontainer()
-        local coin = FindNearestCoin(container)
-        if coin and coin.Parent and coin.Transparency == 1 then
-            local direction = (coin.Position - root.Position)
-            local distance = direction.Magnitude
-            if distance > 4 then
-                local step = math.min(distance, AutoFarmV2Speed * (dt or 0.016))
-                root.CFrame = root.CFrame + direction.Unit * step
-            end
-            if distance <= 8 and coin:FindFirstChild('TouchInterest') then
+    if character then
+        for part, state in pairs(FarmCoinV2Original) do
+            if part and part.Parent then
                 pcall(function()
-                    firetouchinterest(root, coin, 0)
-                    firetouchinterest(root, coin, 1)
+                    part.CanCollide = state.CanCollide
+                    part.Massless = state.Massless
                 end)
             end
+        end
+        FarmCoinV2Original = {}
+        local hum = character:FindFirstChildOfClass('Humanoid')
+        if hum then
+            pcall(function() hum.PlatformStand = false end)
+        end
+        local root = character:FindFirstChild('HumanoidRootPart')
+        if root then
+            root.Velocity = Vector3.zero
+            root.RotVelocity = Vector3.zero
+        end
+    end
+end
+
+local function startFarmCoinV2()
+    stopFarmCoinV2()
+    if not p.Character or not p.Character:FindFirstChild('HumanoidRootPart') then return end
+    if p:GetAttribute('Alive') ~= true then return end
+    FarmCoinV2Enabled = true
+    FarmCoinV2Connection = RunService.Heartbeat:Connect(function()
+        if not FarmCoinV2Enabled or p:GetAttribute('Alive') ~= true then return end
+        local character = p.Character
+        local root = character and character:FindFirstChild('HumanoidRootPart')
+        local hum = character and character:FindFirstChildOfClass('Humanoid')
+        if not root then return end
+
+        if not FarmCoinV2Active then
+            local container = returncoincontainer()
+            local coin, distance = FindNearestCoin(container)
+            if not coin or not coin.Parent or coin.Transparency ~= 1 or allCoinsCollected then return end
+
+            FarmCoinV2Active = true
+            FarmCoinV2Original = {}
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA('BasePart') then
+                    FarmCoinV2Original[part] = {CanCollide = part.CanCollide, Massless = part.Massless}
+                    part.CanCollide = false
+                    part.Massless = true
+                end
+            end
+            if hum then hum.PlatformStand = true end
+
+            local target = coin.Position - Vector3.new(0, 2.5, 0)
+            local targetCF = CFrame.new(target) * CFrame.Angles(math.rad(90), 0, 0)
+            local duration = math.max(0.04, distance / FarmCoinV2Speed)
+            FarmCoinV2Tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = targetCF})
+            FarmCoinV2Tween:Play()
+            task.spawn(function()
+                while FarmCoinV2Enabled and coin and coin.Parent and coin.Transparency == 1 and not allCoinsCollected and p:GetAttribute('Alive') == true do
+                    if root and root.Parent then
+                        root.Velocity = Vector3.zero
+                        root.RotVelocity = Vector3.zero
+                        pcall(function() firetouchinterest(root, coin, 0); firetouchinterest(root, coin, 1) end)
+                    end
+                    RunService.Heartbeat:Wait()
+                end
+                if FarmCoinV2Tween then pcall(function() FarmCoinV2Tween:Cancel() end); FarmCoinV2Tween = nil end
+                FarmCoinV2Active = false
+            end)
         end
     end)
 end
 
 Window:AddToggle({
-    Title = 'Auto Farmer V2',
-    Description = 'Collect coins using Speed + NoClip',
+    Title = 'Farm Coin V2',
+    Description = 'Same coin farm as Farm Coins, but with faster travel',
     Default = false,
     Tab = AutoFarmTab,
     Callback = function(enabled)
         if enabled then
-            startAutoFarmV2()
+            -- Keep the original farm and V2 from fighting over the character.
+            if isFarmingCoins then
+                isFarmingCoins = false
+                if farmingActive then stopFarming() end
+            end
+            startFarmCoinV2()
         else
-            stopAutoFarmV2()
+            stopFarmCoinV2()
         end
     end,
 })
-
 Window:AddSlider({
-    Title = 'Auto Farmer V2 Speed',
-    Description = 'Movement speed while farming',
-    Default = 85,
-    Min = 35,
-    Max = 150,
-    Step = 5,
+    Title = 'Farm Coin V2 Speed',
+    Description = 'Travel speed for the faster coin farm',
+    Default = 58,
+    MinValue = 30,
+    MaxValue = 120,
+    AllowDecimals = false,
     Tab = AutoFarmTab,
-    Callback = function(value)
-        AutoFarmV2Speed = value
-    end,
+    Callback = function(value) FarmCoinV2Speed = value end,
 })
 
 Window:AddToggle({
@@ -1976,115 +2004,6 @@ task.spawn(function()
             end
         end
     end
-end)
-
--- ===== FLY: CAMERA DIRECTION =====
-local FlyEnabled = false
-local FlySpeed = 70
-local FlyBV = nil
-local FlyBG = nil
-local FlyConnection = nil
-
-local function stopFly()
-    FlyEnabled = false
-    if FlyConnection then FlyConnection:Disconnect(); FlyConnection = nil end
-    if FlyBV then FlyBV:Destroy(); FlyBV = nil end
-    if FlyBG then FlyBG:Destroy(); FlyBG = nil end
-    local hum = p.Character and p.Character:FindFirstChildOfClass('Humanoid')
-    if hum then pcall(function() hum.PlatformStand = false end) end
-end
-
-local function startFly()
-    stopFly()
-    local character = p.Character
-    local root = character and character:FindFirstChild('HumanoidRootPart')
-    local hum = character and character:FindFirstChildOfClass('Humanoid')
-    if not root then return end
-    FlyEnabled = true
-    if hum then hum.PlatformStand = true end
-
-    FlyBV = Instance.new('BodyVelocity')
-    FlyBV.Name = 'SakuraProjectFlyVelocity'
-    FlyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    FlyBV.P = 9000
-    FlyBV.Velocity = Vector3.zero
-    FlyBV.Parent = root
-
-    FlyBG = Instance.new('BodyGyro')
-    FlyBG.Name = 'SakuraProjectFlyGyro'
-    FlyBG.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    FlyBG.P = 5000
-    FlyBG.D = 500
-    FlyBG.CFrame = root.CFrame
-    FlyBG.Parent = root
-
-    FlyConnection = RunService.RenderStepped:Connect(function()
-        if not FlyEnabled or not root.Parent then return end
-        local camera = workspace.CurrentCamera
-        if not camera then return end
-        local look = camera.CFrame.LookVector
-        local move = Vector3.zero
-        local hum2 = p.Character and p.Character:FindFirstChildOfClass('Humanoid')
-        if hum2 then move = hum2.MoveDirection end
-
-        -- Movement follows the camera's horizontal facing; W/S follows the
-        -- gaze and Space/Ctrl provide vertical carpet-like movement.
-        local horizontal = Vector3.new(look.X, 0, look.Z)
-        if horizontal.Magnitude > 0 then horizontal = horizontal.Unit end
-        local right = Vector3.new(camera.CFrame.RightVector.X, 0, camera.CFrame.RightVector.Z)
-        if right.Magnitude > 0 then right = right.Unit end
-        local forwardAmount = 0
-        local sideAmount = 0
-        if UIS:IsKeyDown(Enum.KeyCode.W) then forwardAmount += 1 end
-        if UIS:IsKeyDown(Enum.KeyCode.S) then forwardAmount -= 1 end
-        if UIS:IsKeyDown(Enum.KeyCode.D) then sideAmount += 1 end
-        if UIS:IsKeyDown(Enum.KeyCode.A) then sideAmount -= 1 end
-        local vertical = 0
-        if UIS:IsKeyDown(Enum.KeyCode.Space) then vertical += 1 end
-        if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.RightControl) then vertical -= 1 end
-
-        -- On mobile/joystick, Humanoid.MoveDirection is used relative to camera.
-        if forwardAmount == 0 and sideAmount == 0 and move.Magnitude > 0.05 then
-            local md = Vector3.new(move.X, 0, move.Z)
-            if md.Magnitude > 0 then
-                horizontal = md.Unit
-                forwardAmount = md.Magnitude
-            end
-        end
-
-        local velocity = horizontal * (forwardAmount * FlySpeed) + right * (sideAmount * FlySpeed) + Vector3.new(0, vertical * FlySpeed, 0)
-        FlyBV.Velocity = velocity
-        if velocity.Magnitude > 1 then
-            FlyBG.CFrame = CFrame.lookAt(root.Position, root.Position + velocity.Unit)
-        else
-            FlyBG.CFrame = CFrame.lookAt(root.Position, root.Position + look)
-        end
-    end)
-end
-
-Window:AddToggle({
-    Title = 'Fly',
-    Description = 'Fly in the direction of your camera view',
-    Default = false,
-    Tab = LocalPlayerTab,
-    Callback = function(enabled)
-        if enabled then startFly() else stopFly() end
-    end,
-})
-Window:AddSlider({
-    Title = 'Fly Speed',
-    Description = 'Flight movement speed',
-    Default = 70,
-    Min = 20,
-    Max = 180,
-    Step = 5,
-    Tab = LocalPlayerTab,
-    Callback = function(value) FlySpeed = value end,
-})
-
-p.CharacterAdded:Connect(function()
-    if FlyEnabled then task.wait(0.5); startFly() end
-    if AutoFarmV2Enabled then task.wait(0.5); startAutoFarmV2() end
 end)
 
 VisualsTab = Window:AddTab({
@@ -4869,161 +4788,197 @@ MiscTab = Window:AddTab({
     Icon = 'rbxassetid://11963373994',
 })
 
--- ===== SAKURA ANGEL: LOCAL SKIN CHANGER =====
--- Только клиентский визуальный слой: создаёт локальные Clothing/Accessory объекты
--- в персонаже и не вызывает RemoteEvent для смены внешности.
+-- ===== SAKURA PROJECT: SKIN CHANGER =====
+-- Full outfit presets are loaded from Roblox outfit/bundle descriptions.
+-- Item-based presets are assembled into a HumanoidDescription where possible.
 SkinChangerTab = Window:AddTab({
     Title = 'Skin Changer',
     Icon = 'rbxassetid://11963373994',
 })
 
-Window:AddSection({
-    Name = 'Local Skins',
-    Tab = SkinChangerTab,
-})
+Window:AddSection({Name = 'Full Outfit Presets', Tab = SkinChangerTab})
 
-local SakuraLocalSkinApplied = false
-local SakuraLocalSkinFolderName = 'SakuraAngel_LocalSkin'
+local SkinChangerApplied = false
+local SavedHumanoidDescription = nil
+local SavedDescriptionValid = false
+local SkinApplyBusy = false
 
-local function getCharacterParts()
+local function getSkinHumanoid()
     local character = p and p.Character
-    if not character or not character.Parent then
-        return nil, nil
-    end
-    local humanoid = character:FindFirstChildOfClass('Humanoid')
-    if not humanoid then
-        return nil, nil
-    end
-    return character, humanoid
+    local humanoid = character and character:FindFirstChildOfClass('Humanoid')
+    if character and humanoid then return character, humanoid end
+    return nil, nil
 end
 
-local function removeLocalSkin(character)
-    local oldFolder = character and character:FindFirstChild(SakuraLocalSkinFolderName)
-    if oldFolder then
-        oldFolder:Destroy()
-    end
-    for _, obj in ipairs(character:GetChildren()) do
-        if obj:IsA('Shirt') and obj:GetAttribute('SakuraAngelLocalSkin') then
-            obj:Destroy()
-        elseif obj:IsA('Pants') and obj:GetAttribute('SakuraAngelLocalSkin') then
-            obj:Destroy()
-        elseif obj:IsA('Accessory') and obj:GetAttribute('SakuraAngelLocalSkin') then
-            obj:Destroy()
-        end
-    end
-end
-
-local function addLocalAccessory(character, assetId, folder)
-    local ok, objects = pcall(function()
-        return game:GetObjects('rbxassetid://' .. tostring(assetId))
-    end)
-    if not ok or type(objects) ~= 'table' then
-        return false
-    end
-
-    local added = false
-    for _, obj in ipairs(objects) do
-        if obj:IsA('Accessory') then
-            obj:SetAttribute('SakuraAngelLocalSkin', true)
-            obj.Parent = character
-            local humanoid = character:FindFirstChildOfClass('Humanoid')
-            if humanoid then
-                pcall(function()
-                    humanoid:AddAccessory(obj)
-                end)
-            end
-            added = true
-        else
-            obj:Destroy()
-        end
-    end
-    return added
-end
-
-local function applyPinkAngelLocalSkin()
-    local character = getCharacterParts()
-    if not character then
-        return false, 'Character/Humanoid not found'
-    end
-
-    removeLocalSkin(character)
-
-    local folder = Instance.new('Folder')
-    folder.Name = SakuraLocalSkinFolderName
-    folder.Parent = character
-
-    -- Classic pink angel clothing. These are local Shirt/Pants instances.
-    local shirt = Instance.new('Shirt')
-    shirt.Name = 'SakuraAngel_LocalShirt'
-    shirt.ShirtTemplate = 'rbxassetid://5529087338'
-    shirt:SetAttribute('SakuraAngelLocalSkin', true)
-    shirt.Parent = character
-
-    local pants = Instance.new('Pants')
-    pants.Name = 'SakuraAngel_LocalPants'
-    pants.PantsTemplate = 'rbxassetid://5529088945'
-    pants:SetAttribute('SakuraAngelLocalSkin', true)
-    pants.Parent = character
-
-    -- Popular pink angel wings. Failure here does not break the clothing.
-    addLocalAccessory(character, 8651335862, folder)
-
-    SakuraLocalSkinApplied = true
-    return true
-end
-
-local skinButton = Window:AddButton({
-    Title = 'Apply Pink Angel',
-    Description = 'Local visual skin — only on your client',
-    Tab = SkinChangerTab,
-    Callback = function()
-        local ok, err = applyPinkAngelLocalSkin()
+local function restoreOriginalAvatar()
+    local character, humanoid = getSkinHumanoid()
+    if not humanoid then return false, 'Character/Humanoid not found' end
+    if SavedDescriptionValid and SavedHumanoidDescription then
+        local ok, err = pcall(function()
+            humanoid:ApplyDescriptionAsync(SavedHumanoidDescription)
+        end)
         if ok then
-            Window:Notify({
-                Title = 'Skin Changer',
-                Description = 'Pink Angel applied locally.',
-                Duration = 3,
-            })
-            -- После включения кнопка исчезает, как ты просил.
-            pcall(function()
-                if skinButton and skinButton.SetVisible then
-                    skinButton:SetVisible(false)
-                elseif skinButton and skinButton.Visible ~= nil then
-                    skinButton.Visible = false
-                end
-            end)
-        else
-            Window:Notify({
-                Title = 'Skin Changer',
-                Description = tostring(err or 'Failed to apply skin.'),
-                Duration = 3,
-            })
+            SkinChangerApplied = false
+            return true
         end
-    end,
-})
+        return false, tostring(err)
+    end
+    return false, 'Original avatar description is not available yet'
+end
 
+local function applyOutfitId(outfitId, label)
+    if SkinApplyBusy then return end
+    local character, humanoid = getSkinHumanoid()
+    if not humanoid then
+        Window:Notify({Title='Skin Changer', Description='Character/Humanoid not found.', Duration=3})
+        return
+    end
+    SkinApplyBusy = true
+    local ok, err = pcall(function()
+        if not SavedDescriptionValid then
+            SavedHumanoidDescription = humanoid:GetAppliedDescription()
+            SavedDescriptionValid = SavedHumanoidDescription ~= nil
+        end
+        local id = tonumber(outfitId)
+        local desc
+        local directOk, directResult = pcall(function()
+            return Players:GetHumanoidDescriptionFromOutfitIdAsync(id)
+        end)
+        if directOk and directResult then
+            desc = directResult
+        else
+            -- The source calls these entries "Костюм"; if an entry is a bundle ID,
+            -- resolve its UserOutfit first, then request the HumanoidDescription.
+            local details = game:GetService('AssetService'):GetBundleDetailsAsync(id)
+            local userOutfitId
+            for _, item in ipairs(details.Items or {}) do
+                if item.Type == 'UserOutfit' and tonumber(item.Id) then
+                    userOutfitId = tonumber(item.Id)
+                    break
+                end
+            end
+            if not userOutfitId then error(directResult or 'No UserOutfit found') end
+            desc = Players:GetHumanoidDescriptionFromOutfitIdAsync(userOutfitId)
+        end
+        humanoid:ApplyDescriptionAsync(desc)
+    end)
+    SkinApplyBusy = false
+    if ok then
+        SkinChangerApplied = true
+        Window:Notify({Title='Skin Changer', Description=tostring(label) .. ' applied.', Duration=3})
+    else
+        Window:Notify({Title='Skin Changer', Description='Could not apply ' .. tostring(label) .. ': ' .. tostring(err), Duration=4})
+    end
+end
+
+-- These are the outfit/bundle IDs listed by the supplied Mops skins page.
+-- The page lists nine ready-made costumes.
+local MopsOutfits = {
+    {222248886534563, 'Mops Costume 01'},
+    {22279615053230, 'Mops Costume 02'},
+    {153555770848508, 'Mops Costume 03'},
+    {28386380076980, 'Mops Costume 04'},
+    {381360, 'Mops Costume 05'},
+    {271854630526116, 'Mops Costume 06'},
+    {88994088252433, 'Mops Costume 07'},
+    {91631439505887, 'Mops Costume 08'},
+    {114863424051234, 'Mops Costume 09'},
+}
+for index, preset in ipairs(MopsOutfits) do
+    local id, name = preset[1], preset[2]
+    Window:AddButton({
+        Title = name,
+        Description = 'Full outfit preset • ID ' .. tostring(id),
+        Tab = SkinChangerTab,
+        Callback = function() applyOutfitId(id, name) end,
+    })
+end
+
+Window:AddSection({Name = 'Cute / Milashka Presets', Tab = SkinChangerTab})
+
+-- These sets are assembled from the exact item IDs/names published on the supplied 2026 page.
+-- Because these are item lists rather than outfit IDs, the helper applies compatible fields individually.
+local MilashkaSets = {
+    {
+        name = 'Milashka_03709 • Black Neko',
+        items = {10930362495, 13886546559, 14473722760, 14618207727, 73422661700694, 76347276059872, 106330973785235, 123863011354736, 132665376085952},
+    },
+    {
+        name = 'milashka10102019 • Pink & White Kawaii',
+        items = {12531188286, 15938951885, 95312957061869, 101556001990514, 109965457170229, 131429879743025, 139929216393468},
+    },
+    {
+        name = 'Milashka_03709 • Y2K Grunge',
+        items = {70972365842585, 109711115364795},
+    },
+    {
+        name = 'milashka_love222 • Bunny / Black & Red',
+        items = {14618207727, 91474821972762, 98145245029080, 108052524034650, 125225445519700, 127695465501041},
+    },
+    {
+        name = 'Oigmsgf • Cute Black Dress',
+        items = {13156797522, 13253945492, 14183430773, 14820341694, 15339167928, 78761836930990, 114491571252088, 136439847526611},
+    },
+}
+
+local function applyMilashkaSet(set)
+    local character, humanoid = getSkinHumanoid()
+    if not character or not humanoid then
+        Window:Notify({Title='Skin Changer', Description='Character/Humanoid not found.', Duration=3})
+        return
+    end
+    if SkinApplyBusy then return end
+    SkinApplyBusy = true
+    local ok, err = pcall(function()
+        if not SavedDescriptionValid then
+            SavedHumanoidDescription = humanoid:GetAppliedDescription()
+            SavedDescriptionValid = SavedHumanoidDescription ~= nil
+        end
+        -- Load each listed Roblox asset and attach the actual Shirt/Pants/Accessory object.
+        -- This is more reliable for mixed classic + accessory lists than guessing an AssetTypeId.
+        for _, assetId in ipairs(set.items or {}) do
+            local objects = game:GetObjects('rbxassetid://' .. tostring(assetId))
+            for _, obj in ipairs(objects) do
+                if obj:IsA('Accessory') then
+                    obj:SetAttribute('SakuraProjectLocalSkin', true)
+                    obj.Parent = character
+                    pcall(function() humanoid:AddAccessory(obj) end)
+                elseif obj:IsA('Shirt') or obj:IsA('Pants') or obj:IsA('ShirtGraphic') then
+                    obj:SetAttribute('SakuraProjectLocalSkin', true)
+                    obj.Parent = character
+                elseif obj then
+                    obj:Destroy()
+                end
+            end
+        end
+    end)
+    SkinApplyBusy = false
+    if ok then
+        SkinChangerApplied = true
+        Window:Notify({Title='Skin Changer', Description=set.name .. ' applied locally.', Duration=3})
+    else
+        Window:Notify({Title='Skin Changer', Description='Could not apply set: ' .. tostring(err), Duration=4})
+    end
+end
+
+for _, set in ipairs(MilashkaSets) do
+    local preset = set
+    Window:AddButton({
+        Title = preset.name,
+        Description = 'Cute full-style preset from the supplied 2026 item list',
+        Tab = SkinChangerTab,
+        Callback = function() applyMilashkaSet(preset) end,
+    })
+end
+
+Window:AddSection({Name = 'Skin Controls', Tab = SkinChangerTab})
 Window:AddButton({
-    Title = 'Remove Local Skin',
-    Description = 'Restores the character by removing Sakura local items',
+    Title = 'Restore Original Avatar',
+    Description = 'Restore the avatar description saved before the last skin',
     Tab = SkinChangerTab,
     Callback = function()
-        local character = p and p.Character
-        if character then
-            removeLocalSkin(character)
-            SakuraLocalSkinApplied = false
-            pcall(function()
-                if skinButton and skinButton.SetVisible then
-                    skinButton:SetVisible(true)
-                elseif skinButton and skinButton.Visible ~= nil then
-                    skinButton.Visible = true
-                end
-            end)
-            Window:Notify({
-                Title = 'Skin Changer',
-                Description = 'Local skin removed.',
-                Duration = 2,
-            })
-        end
+        local ok, err = restoreOriginalAvatar()
+        Window:Notify({Title='Skin Changer', Description=ok and 'Original avatar restored.' or tostring(err), Duration=3})
     end,
 })
 
@@ -7212,6 +7167,42 @@ task.spawn(function()
     print('[Sakura Project] UI upgraded: 1080x740, GothamBold, 30px toggles')
 end)
 
+-- ===== SAKURA PROJECT: UI POLISH =====
+task.spawn(function()
+    task.wait(1.2)
+    local PlayersSvc = game:GetService('Players')
+    local CoreGuiSvc = game:GetService('CoreGui')
+    local pg = PlayersSvc.LocalPlayer:WaitForChild('PlayerGui')
+    local pink = Color3.fromRGB(255, 105, 200)
+
+    local roots = {pg, CoreGuiSvc}
+    for _, root in ipairs(roots) do
+        for _, obj in ipairs(root:GetDescendants()) do
+            if obj:IsA('TextLabel') or obj:IsA('TextButton') then
+                local text = tostring(obj.Text or '')
+                local lower = string.lower(text)
+                if lower:find('heartagram', 1, true) or lower == 'heartagram hub' or lower == 'hub' then
+                    if lower:find('heartagram', 1, true) or lower == 'heartagram hub' then
+                        obj.Text = 'Sakura Project'
+                        pcall(function() obj.TextColor3 = pink end)
+                    end
+                end
+                local tabs = {
+                    ['combat']=true, ['localplayer']=true, ['autofarm']=true, ['visuals']=true,
+                    ['misc']=true, ['skin changer']=true, ['spawner']=true, ['settings']=true,
+                }
+                if tabs[lower] then
+                    pcall(function()
+                        obj.Font = Enum.Font.GothamBold
+                        obj.TextSize = 18
+                        if obj:IsA('TextButton') then obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, 42) end
+                    end)
+                end
+            end
+        end
+    end
+end)
+
 -- ===== SAKURA PROJECT: 10 LOCAL VISUAL FEATURES =====
 local SakuraVisualsSection = nil
 pcall(function()
@@ -7413,6 +7404,6 @@ end)
 task.wait(1)
 Window:Notify({
     Title = 'Sakura Project',
-    Description = 'Ready — native ClickGUI button is draggable, UI enlarged, BOLD text enabled, Auto Farmer V2 and Fly loaded.',
+    Description = 'Ready — Sakura Project UI polished, Farm Coin V2 and full skin presets loaded.',
     Duration = 5,
 })
