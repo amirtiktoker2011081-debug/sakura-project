@@ -4788,10 +4788,12 @@ MiscTab = Window:AddTab({
     Icon = 'rbxassetid://11963373994',
 })
 
--- ===== SAKURA PROJECT: SKIN CHANGER (LOCAL VISUAL ENGINE) =====
--- Roblox blocks Humanoid:ApplyDescriptionAsync from normal client execution.
--- This version gets the HumanoidDescription, then reproduces its appearance locally
--- by editing the character's existing body parts and adding the listed accessories/clothes.
+-- ===== SAKURA PROJECT: SKIN CHANGER (LOCAL VISUAL MODEL ENGINE) =====
+-- Local-only avatar renderer. It never calls Humanoid:ApplyDescriptionAsync().
+-- Roblox documents CreateHumanoidModelFromDescriptionAsync() as a way to build
+-- a complete Humanoid model from a HumanoidDescription; we use that model as
+-- the source and transplant its visual parts/accessories into the live client
+-- character instead of asking the server to apply the description.
 SkinChangerTab = Window:AddTab({
     Title = 'Skin Changer',
     Icon = 'rbxassetid://11963373994',
@@ -4803,6 +4805,7 @@ local SkinApplyBusy = false
 local SkinOriginalSnapshot = nil
 local SkinLocalObjects = {}
 local SkinCurrentLabel = nil
+local SkinOldBodyParts = {}
 
 local function getSkinHumanoid()
     local character = p and p.Character
@@ -4812,9 +4815,7 @@ local function getSkinHumanoid()
 end
 
 local function skinTrack(obj)
-    if obj then
-        table.insert(SkinLocalObjects, obj)
-    end
+    if obj then table.insert(SkinLocalObjects, obj) end
     return obj
 end
 
@@ -4826,7 +4827,6 @@ local function skinDestroyLocalObjects()
         end)
         SkinLocalObjects[i] = nil
     end
-    -- Also clean anything left behind by an older version.
     local character = p and p.Character
     if character then
         for _, obj in ipairs(character:GetDescendants()) do
@@ -4839,36 +4839,31 @@ end
 
 local function skinSnapshotCharacter(character)
     if SkinOriginalSnapshot and SkinOriginalSnapshot.character == character then return end
-    local snap = {character = character, parts = {}, clothing = {}, colors = {}, faceTexture = nil}
+    local snap = {character = character, body = {}, joints = {}, clothes = {}, accessories = {}, colors = nil, scales = {}}
 
     for _, obj in ipairs(character:GetDescendants()) do
-        if obj:IsA('MeshPart') then
-            snap.parts[obj] = {
-                MeshId = obj.MeshId,
-                TextureID = obj.TextureID,
-                Transparency = obj.Transparency,
-                Color = obj.Color,
+        if obj:IsA('Motor6D') then
+            snap.joints[obj] = {
+                parent = obj.Parent,
+                part0 = obj.Part0,
+                part1 = obj.Part1,
+                c0 = obj.C0,
+                c1 = obj.C1,
+                transform = obj.Transform,
             }
-        elseif obj:IsA('BasePart') then
-            snap.parts[obj] = {
-                Transparency = obj.Transparency,
-                Color = obj.Color,
-            }
-        elseif obj:IsA('Shirt') then
-            snap.clothing.Shirt = obj.ShirtTemplate
-        elseif obj:IsA('Pants') then
-            snap.clothing.Pants = obj.PantsTemplate
-        elseif obj:IsA('ShirtGraphic') then
-            snap.clothing.ShirtGraphic = obj.Graphic
+        elseif obj:IsA('BasePart') and obj.Name ~= 'HumanoidRootPart' then
+            snap.body[obj] = {name=obj.Name, transparency=obj.Transparency, parent=obj.Parent}
         elseif obj:IsA('BodyColors') then
-            snap.colors = {
-                HeadColor3 = obj.HeadColor3, LeftArmColor3 = obj.LeftArmColor3,
-                RightArmColor3 = obj.RightArmColor3, LeftLegColor3 = obj.LeftLegColor3,
-                RightLegColor3 = obj.RightLegColor3, TorsoColor3 = obj.TorsoColor3,
-            }
-        elseif obj:IsA('Decal') and (obj.Name == 'face' or obj.Name == 'Face') then
-            snap.faceTexture = obj.Texture
+            snap.colors = obj:Clone()
+        elseif obj:IsA('NumberValue') and string.find(obj.Name, 'Scale', 1, true) then
+            snap.scales[obj.Name] = obj.Value
         end
+    end
+    for _, obj in ipairs(character:GetChildren()) do
+        if obj:IsA('Accessory') then table.insert(snap.accessories, obj:Clone())
+        elseif obj:IsA('Shirt') then snap.clothes.Shirt = obj:Clone()
+        elseif obj:IsA('Pants') then snap.clothes.Pants = obj:Clone()
+        elseif obj:IsA('ShirtGraphic') then snap.clothes.ShirtGraphic = obj:Clone() end
     end
     SkinOriginalSnapshot = snap
 end
@@ -4876,265 +4871,212 @@ end
 local function skinRestoreSnapshot()
     local character = p and p.Character
     local snap = SkinOriginalSnapshot
-    if not character or not snap or snap.character ~= character then
-        return false
-    end
+    if not character or not snap or snap.character ~= character then return false end
 
     skinDestroyLocalObjects()
 
-    for obj, data in pairs(snap.parts) do
-        if obj and obj.Parent then
+    -- Remove body replacements and restore the original character body if it
+    -- was retained. Normally the Roblox character itself survives respawns.
+    for oldPart, data in pairs(SkinOldBodyParts) do
+        if oldPart and oldPart.Parent then
             pcall(function()
-                if obj:IsA('MeshPart') then
-                    obj.MeshId = data.MeshId
-                    obj.TextureID = data.TextureID
-                end
-                if data.Transparency ~= nil then obj.Transparency = data.Transparency end
-                if data.Color then obj.Color = data.Color end
+                oldPart.Name = data.name or oldPart.Name
+                oldPart.Transparency = data.transparency or 0
             end)
         end
     end
+    SkinOldBodyParts = {}
 
-    local shirt = character:FindFirstChildOfClass('Shirt')
-    if snap.clothing.Shirt then
-        if not shirt then shirt = skinTrack(Instance.new('Shirt')) shirt.Parent = character end
-        shirt.ShirtTemplate = snap.clothing.Shirt
+    -- Restore original clothing/accessories from the saved clones.
+    for _, obj in ipairs(character:GetChildren()) do
+        if obj:IsA('Accessory') or obj:IsA('Shirt') or obj:IsA('Pants') or obj:IsA('ShirtGraphic') then
+            pcall(function() obj:Destroy() end)
+        end
     end
-    local pants = character:FindFirstChildOfClass('Pants')
-    if snap.clothing.Pants then
-        if not pants then pants = skinTrack(Instance.new('Pants')) pants.Parent = character end
-        pants.PantsTemplate = snap.clothing.Pants
+    for _, obj in ipairs(snap.accessories or {}) do
+        pcall(function() obj.Parent = character end)
     end
-    local graphic = character:FindFirstChildOfClass('ShirtGraphic')
-    if snap.clothing.ShirtGraphic then
-        if not graphic then graphic = skinTrack(Instance.new('ShirtGraphic')) graphic.Parent = character end
-        graphic.Graphic = snap.clothing.ShirtGraphic
+    for _, key in ipairs({'Shirt','Pants','ShirtGraphic'}) do
+        local obj=snap.clothes[key]
+        if obj then pcall(function() obj.Parent=character end) end
+    end
+    if snap.colors then
+        local current=character:FindFirstChildOfClass('BodyColors')
+        if current then pcall(function() current:Destroy() end) end
+        local clone=snap.colors:Clone(); clone.Parent=character
     end
 
-    local colors = character:FindFirstChildOfClass('BodyColors')
-    if colors and next(snap.colors) then
-        for k, v in pairs(snap.colors) do pcall(function() colors[k] = v end) end
+    -- Reconnect original joints to their original parts.
+    for joint, data in pairs(snap.joints) do
+        if joint and joint.Parent then
+            pcall(function()
+                joint.Part0 = data.part0
+                joint.Part1 = data.part1
+                joint.C0 = data.c0
+                joint.C1 = data.c1
+                joint.Transform = data.transform
+                joint.Parent = data.parent or character
+            end)
+        end
     end
-    if snap.faceTexture then
-        local head = character:FindFirstChild('Head')
-        local face = head and (head:FindFirstChild('face') or head:FindFirstChild('Face'))
-        if face and face:IsA('Decal') then face.Texture = snap.faceTexture end
+    for name, value in pairs(snap.scales) do
+        local obj = character:FindFirstChild(name)
+        if obj and obj:IsA('NumberValue') then pcall(function() obj.Value = value end) end
     end
     return true
 end
 
-local function skinLoadObjects(assetId)
-    local ok, objects = pcall(function()
-        return game:GetObjects('rbxassetid://' .. tostring(assetId))
+local function skinCreateDescriptionModel(desc, humanoid)
+    local ok, model = pcall(function()
+        return Players:CreateHumanoidModelFromDescriptionAsync(desc, humanoid.RigType)
     end)
-    if not ok or type(objects) ~= 'table' then return {} end
-    return objects
+    if ok and model then return model end
+    error(tostring(model or 'CreateHumanoidModelFromDescriptionAsync failed'))
 end
 
-local function skinFindMeshSource(root)
-    if root:IsA('MeshPart') then return root end
-    if root:IsA('SpecialMesh') then return root end
-    for _, obj in ipairs(root:GetDescendants()) do
-        if obj:IsA('MeshPart') or obj:IsA('SpecialMesh') then return obj end
-    end
-    return nil
-end
+local function skinMakeVisualModel(desc, character, humanoid)
+    local sourceModel = skinCreateDescriptionModel(desc, humanoid)
+    local oldParts = {}
+    local replacementMap = {}
 
-local function skinSetPartMesh(part, source)
-    if not part or not source then return false end
-    if part:IsA('MeshPart') and source:IsA('MeshPart') then
-        pcall(function() part.MeshId = source.MeshId end)
-        pcall(function() part.TextureID = source.TextureID end)
-        return true
-    end
-    if part:IsA('BasePart') and source:IsA('SpecialMesh') then
-        local sm = part:FindFirstChild('SakuraProjectLocalMesh')
-        if not sm then
-            sm = Instance.new('SpecialMesh')
-            sm.Name = 'SakuraProjectLocalMesh'
-            sm:SetAttribute('SakuraProjectLocalSkin', true)
-            sm.Parent = part
-            skinTrack(sm)
+    -- Preserve all existing joints by moving them temporarily to the character
+    -- root before replacing visual body parts.
+    local joints = {}
+    for _, joint in ipairs(character:GetDescendants()) do
+        if joint:IsA('Motor6D') then
+            joints[joint] = {parent = joint.Parent, part0 = joint.Part0, part1 = joint.Part1, c0 = joint.C0, c1 = joint.C1, transform = joint.Transform}
+            pcall(function() joint.Parent = character end)
         end
-        pcall(function() sm.MeshType = source.MeshType end)
-        pcall(function() sm.MeshId = source.MeshId end)
-        pcall(function() sm.TextureId = source.TextureId end)
-        pcall(function() sm.Scale = source.Scale end)
-        return true
-    end
-    return false
-end
-
-local function skinApplyBodyAsset(assetId, names)
-    if not tonumber(assetId) or tonumber(assetId) == 0 then return end
-    local objects = skinLoadObjects(assetId)
-    local targets = {}
-    for _, name in ipairs(names) do
-        local part = p.Character and p.Character:FindFirstChild(name)
-        if part then table.insert(targets, part) end
     end
 
-    for _, root in ipairs(objects) do
-        local sources = {}
-        if root:IsA('MeshPart') or root:IsA('SpecialMesh') then
-            table.insert(sources, root)
-        else
-            for _, obj in ipairs(root:GetDescendants()) do
-                if obj:IsA('MeshPart') or obj:IsA('SpecialMesh') then
-                    table.insert(sources, obj)
+    local targetsByName = {}
+    for _, obj in ipairs(character:GetChildren()) do
+        if obj:IsA('BasePart') and obj.Name ~= 'HumanoidRootPart' then targetsByName[obj.Name] = obj end
+    end
+    for _, sourcePart in ipairs(sourceModel:GetDescendants()) do
+        if sourcePart:IsA('BasePart') and sourcePart.Name ~= 'HumanoidRootPart' then
+            local target = targetsByName[sourcePart.Name]
+            if target and not replacementMap[target] then
+                local clone = sourcePart:Clone()
+                clone.Name = sourcePart.Name
+                -- The live character keeps its own Motor6Ds; remove joints copied
+                -- from the temporary source model so they cannot reference the
+                -- temporary model after cloning.
+                for _, child in ipairs(clone:GetDescendants()) do
+                    if child:IsA('Motor6D') or child:IsA('Weld') or child:IsA('WeldConstraint') then
+                        pcall(function() child:Destroy() end)
+                    end
                 end
-            end
-        end
-
-        local used = {}
-        -- Prefer matching body-part names (R15 body packages contain several meshes).
-        for _, source in ipairs(sources) do
-            local sourceName = tostring(source.Name)
-            local target = p.Character and p.Character:FindFirstChild(sourceName)
-            if target and not used[target] then
-                if skinSetPartMesh(target, source) then used[target] = true end
-            end
-        end
-        -- If the asset exposes one unnamed mesh, apply it to the requested target.
-        if #sources == 1 then
-            for _, target in ipairs(targets) do
-                if not used[target] and skinSetPartMesh(target, sources[1]) then
-                    used[target] = true
-                    break
-                end
-            end
-        end
-        pcall(function() if root and root.Parent == nil then root:Destroy() end end)
-    end
-end
-
-local function skinApplyColors(desc, character)
-    local colors = character:FindFirstChildOfClass('BodyColors')
-    if not colors then
-        colors = Instance.new('BodyColors')
-        colors:SetAttribute('SakuraProjectLocalSkin', true)
-        colors.Parent = character
-        skinTrack(colors)
-    end
-    local map = {
-        HeadColor = desc.HeadColor,
-        LeftArmColor = desc.LeftArmColor,
-        RightArmColor = desc.RightArmColor,
-        LeftLegColor = desc.LeftLegColor,
-        RightLegColor = desc.RightLegColor,
-        TorsoColor = desc.TorsoColor,
-    }
-    for prop, value in pairs(map) do
-        if value then pcall(function() colors[prop .. '3'] = value end) end
-    end
-end
-
-local function skinApplyClothes(desc, character)
-    local function setClothing(className, prop, value)
-        local obj = character:FindFirstChildOfClass(className)
-        if not obj then
-            obj = Instance.new(className)
-            obj.Name = 'SakuraProjectLocalSkin_' .. className
-            obj:SetAttribute('SakuraProjectLocalSkin', true)
-            obj.Parent = character
-            skinTrack(obj)
-        end
-        if value and tonumber(value) and tonumber(value) ~= 0 then
-            obj[prop] = 'rbxassetid://' .. tostring(value)
-        end
-    end
-    if tonumber(desc.Shirt) and desc.Shirt ~= 0 then setClothing('Shirt', 'ShirtTemplate', desc.Shirt) end
-    if tonumber(desc.Pants) and desc.Pants ~= 0 then setClothing('Pants', 'PantsTemplate', desc.Pants) end
-    if tonumber(desc.GraphicTShirt) and desc.GraphicTShirt ~= 0 then setClothing('ShirtGraphic', 'Graphic', desc.GraphicTShirt) end
-end
-
-local function skinApplyFace(desc, character)
-    local head = character:FindFirstChild('Head')
-    if not head or not tonumber(desc.Face) or tonumber(desc.Face) == 0 then return end
-    local face = head:FindFirstChild('face') or head:FindFirstChild('Face')
-    if not face then
-        face = Instance.new('Decal')
-        face.Name = 'face'
-        face.Face = Enum.NormalId.Front
-        face.Parent = head
-        skinTrack(face)
-    end
-    face.Texture = 'rbxassetid://' .. tostring(desc.Face)
-end
-
-local function skinApplyAccessories(desc, humanoid, character)
-    local accessories = {}
-    local ok, list = pcall(function() return desc:GetAccessories(true) end)
-    if ok and type(list) == 'table' then
-        for _, info in ipairs(list) do
-            if tonumber(info.AssetId) and tonumber(info.AssetId) ~= 0 then
-                table.insert(accessories, tonumber(info.AssetId))
+                clone.CFrame = target.CFrame
+                clone.Anchored = false
+                clone.CanCollide = false
+                clone.CanTouch = false
+                clone.CanQuery = false
+                clone.Massless = true
+                clone:SetAttribute('SakuraProjectLocalSkin', true)
+                clone.Parent = target.Parent
+                replacementMap[target] = clone
+                oldParts[target] = true
             end
         end
     end
-    -- Fallback for older descriptions that do not expose GetAccessories properly.
-    if #accessories == 0 then
-        local props = {'BackAccessory','FaceAccessory','FrontAccessory','HairAccessory','HatAccessory','NeckAccessory','ShouldersAccessory','WaistAccessory'}
-        for _, prop in ipairs(props) do
-            local value = tostring(desc[prop] or '')
-            for id in string.gmatch(value, '%d+') do table.insert(accessories, tonumber(id)) end
+
+    -- Rewire the character's original Motor6Ds to the new visual parts.
+    for joint, data in pairs(joints) do
+        pcall(function()
+            joint.Part0 = replacementMap[data.part0] or data.part0
+            joint.Part1 = replacementMap[data.part1] or data.part1
+            joint.C0 = data.c0
+            joint.C1 = data.c1
+            joint.Transform = data.transform
+            joint.Parent = character
+        end)
+    end
+
+    for oldPart, _ in pairs(oldParts) do
+        SkinOldBodyParts[oldPart] = {name=oldPart.Name, transparency=oldPart.Transparency}
+        pcall(function()
+            oldPart.Name = 'SakuraProjectOriginal_' .. oldPart.Name
+            oldPart.Transparency = 1
+            oldPart.CanCollide = false
+            oldPart.CanTouch = false
+            oldPart.CanQuery = false
+        end)
+    end
+
+    -- Copy body colors, clothing, and scales from the generated visual model.
+    local sourceColors = sourceModel:FindFirstChildOfClass('BodyColors')
+    if sourceColors then
+        local colors = character:FindFirstChildOfClass('BodyColors')
+        if not colors then
+            colors = Instance.new('BodyColors')
+            colors:SetAttribute('SakuraProjectLocalSkin', true)
+            colors.Parent = character
+            skinTrack(colors)
+        end
+        for _, prop in ipairs({'HeadColor3','LeftArmColor3','RightArmColor3','LeftLegColor3','RightLegColor3','TorsoColor3'}) do
+            pcall(function() colors[prop] = sourceColors[prop] end)
         end
     end
 
-    local seen = {}
-    for _, assetId in ipairs(accessories) do
-        if not seen[assetId] then
-            seen[assetId] = true
-            for _, root in ipairs(skinLoadObjects(assetId)) do
-                local acc = root:IsA('Accessory') and root or root:FindFirstChildWhichIsA('Accessory', true)
-                if acc then
-                    acc:SetAttribute('SakuraProjectLocalSkin', true)
-                    acc.Parent = character
-                    skinTrack(acc)
-                    pcall(function() humanoid:AddAccessory(acc) end)
-                else
-                    pcall(function() root:Destroy() end)
-                end
+    for _, className in ipairs({'Shirt','Pants','ShirtGraphic'}) do
+        local source = sourceModel:FindFirstChildOfClass(className)
+        if source then
+            local old = character:FindFirstChildOfClass(className)
+            if old then pcall(function() old:Destroy() end) end
+            local clone = source:Clone()
+            clone:SetAttribute('SakuraProjectLocalSkin', true)
+            clone.Parent = character
+            skinTrack(clone)
+        end
+    end
+
+    for _, source in ipairs(sourceModel:GetChildren()) do
+        if source:IsA('Accessory') then
+            local clone = source:Clone()
+            clone:SetAttribute('SakuraProjectLocalSkin', true)
+            clone.Parent = character
+            skinTrack(clone)
+            pcall(function() humanoid:AddAccessory(clone) end)
+        end
+    end
+
+    for _, source in ipairs(sourceModel:GetChildren()) do
+        if source:IsA('NumberValue') and string.find(source.Name, 'Scale', 1, true) then
+            local target = humanoid.Parent:FindFirstChild(source.Name)
+            if target and target:IsA('NumberValue') then pcall(function() target.Value = source.Value end) end
+        end
+    end
+
+    local sourceHead = sourceModel:FindFirstChild('Head')
+    local targetHead = character:FindFirstChild('Head')
+    if sourceHead and targetHead then
+        local sourceFace = sourceHead:FindFirstChild('face') or sourceHead:FindFirstChild('Face')
+        local targetFace = targetHead:FindFirstChild('face') or targetHead:FindFirstChild('Face')
+        if sourceFace and sourceFace:IsA('Decal') then
+            if not targetFace then
+                targetFace = sourceFace:Clone()
+                targetFace.Name = 'face'
+                targetFace:SetAttribute('SakuraProjectLocalSkin', true)
+                targetFace.Parent = targetHead
+                skinTrack(targetFace)
+            else
+                targetFace.Texture = sourceFace.Texture
             end
         end
     end
-end
 
-local function skinApplyScales(desc, humanoid)
-    local scaleMap = {
-        BodyDepthScale = desc.DepthScale,
-        BodyHeightScale = desc.HeightScale,
-        BodyWidthScale = desc.WidthScale,
-        BodyProportionScale = desc.ProportionScale,
-        BodyTypeScale = desc.BodyTypeScale,
-        HeadScale = desc.HeadScale,
-    }
-    for name, value in pairs(scaleMap) do
-        local obj = humanoid.Parent and humanoid.Parent:FindFirstChild(name)
-        if obj and typeof(value) == 'number' then pcall(function() obj.Value = value end) end
-    end
+    pcall(function() sourceModel:Destroy() end)
 end
 
 local function applyDescriptionLocally(desc, label)
     local character, humanoid = getSkinHumanoid()
     if not character or not humanoid then error('Character/Humanoid not found') end
+    if SkinCurrentLabel then pcall(skinRestoreSnapshot) end
     skinSnapshotCharacter(character)
     skinDestroyLocalObjects()
-
-    -- Body packages. The source page calls these "costumes"; we resolve the
-    -- description first and then copy its body assets into the live character.
-    skinApplyBodyAsset(desc.Head, {'Head'})
-    skinApplyBodyAsset(desc.Torso, {'UpperTorso','Torso','LowerTorso'})
-    skinApplyBodyAsset(desc.LeftArm, {'LeftUpperArm','LeftLowerArm','LeftHand','Left Arm'})
-    skinApplyBodyAsset(desc.RightArm, {'RightUpperArm','RightLowerArm','RightHand','Right Arm'})
-    skinApplyBodyAsset(desc.LeftLeg, {'LeftUpperLeg','LeftLowerLeg','LeftFoot','Left Leg'})
-    skinApplyBodyAsset(desc.RightLeg, {'RightUpperLeg','RightLowerLeg','RightFoot','Right Leg'})
-    skinApplyColors(desc, character)
-    skinApplyClothes(desc, character)
-    skinApplyFace(desc, character)
-    skinApplyScales(desc, humanoid)
-    skinApplyAccessories(desc, humanoid, character)
-
+    SkinOldBodyParts = {}
+    skinMakeVisualModel(desc, character, humanoid)
     SkinCurrentLabel = label
 end
 
@@ -5143,23 +5085,12 @@ local function getOutfitDescription(id)
         return Players:GetHumanoidDescriptionFromOutfitIdAsync(tonumber(id))
     end)
     if ok and result then return result end
-
-    -- Some of the supplied IDs are bundle IDs rather than UserOutfit IDs.
-    local details = game:GetService('AssetService'):GetBundleDetailsAsync(tonumber(id))
-    local userOutfitId
-    for _, item in ipairs(details.Items or {}) do
-        if item.Type == 'UserOutfit' and tonumber(item.Id) then
-            userOutfitId = tonumber(item.Id)
-            break
-        end
-    end
-    if not userOutfitId then error(tostring(result or 'No UserOutfit found')) end
-    return Players:GetHumanoidDescriptionFromOutfitIdAsync(userOutfitId)
+    error(tostring(result or 'Invalid outfit/bundle ID'))
 end
 
 local function applyOutfitId(outfitId, label)
     if SkinApplyBusy then return end
-    local character, humanoid = getSkinHumanoid()
+    local _, humanoid = getSkinHumanoid()
     if not humanoid then
         Window:Notify({Title='Skin Changer', Description='Character/Humanoid not found.', Duration=3})
         return
@@ -5173,42 +5104,36 @@ local function applyOutfitId(outfitId, label)
     if ok then
         Window:Notify({Title='Skin Changer', Description=tostring(label) .. ' applied locally.', Duration=3})
     else
-        Window:Notify({Title='Skin Changer', Description='Could not apply ' .. tostring(label) .. ': ' .. tostring(err), Duration=4})
+        Window:Notify({Title='Skin Changer', Description='Could not apply ' .. tostring(label) .. ': ' .. tostring(err), Duration=5})
     end
 end
 
-local MopsOutfits = {
-    {222248886534563, 'Mops Costume 01'},
-    {22279615053230, 'Mops Costume 02'},
-    {153555770848508, 'Mops Costume 03'},
-    {28386380076980, 'Mops Costume 04'},
-    {381360, 'Mops Costume 05'},
-    {271854630526116, 'Mops Costume 06'},
-    {88994088252433, 'Mops Costume 07'},
-    {91631439505887, 'Mops Costume 08'},
-    {114863424051234, 'Mops Costume 09'},
-}
-for _, preset in ipairs(MopsOutfits) do
-    local id, name = preset[1], preset[2]
-    Window:AddButton({
-        Title = name,
-        Description = 'Full outfit • LOCAL visual copy • ID ' .. tostring(id),
-        Tab = SkinChangerTab,
-        Callback = function() applyOutfitId(id, name) end,
-    })
-end
-
-Window:AddSection({Name = 'Cute / Milashka Presets', Tab = SkinChangerTab})
-
-local MilashkaSets = {
-    {name='Milashka_03709 • Black Neko', items={10930362495,13886546559,14473722760,14618207727,73422661700694,76347276059872,106330973785235,123863011354736,132665376085952}},
-    {name='milashka10102019 • Pink & White Kawaii', items={12531188286,15938951885,95312957061869,101556001990514,109965457170229,131429879743025,139929216393468}},
-    {name='Milashka_03709 • Y2K Grunge', items={70972365842585,109711115364795}},
-    {name='milashka_love222 • Bunny / Black & Red', items={14618207727,91474821972762,98145245029080,108052524034650,125225445519700,127695465501041}},
-    {name='Oigmsgf • Cute Black Dress', items={13156797522,13253945492,14183430773,14820341694,15339167928,78761836930990,114491571252088,136439847526611}},
+-- Old user-supplied Mops/Milashka IDs are intentionally removed. These sets
+-- use newly researched 2025-2026 catalog assets instead.
+local SakuraSkinSets = {
+    {
+        name = '2026 • Black Street / Neko',
+        ids = {93085894050661, 133881421588973, 70900202875823, 78479406664358},
+    },
+    {
+        name = '2026 • Pink Cat Ribbon',
+        ids = {113074223303024, 107365932698068, 96950229320019, 123149577807585, 78797181387509},
+    },
+    {
+        name = '2026 • Angel Pink',
+        ids = {84100413956770, 98604405382195, 74630922086444, 132413946223644},
+    },
+    {
+        name = '2026 • Emo / Grunge Black',
+        ids = {78580171276956, 70748193206569, 70900202875823, 91431619061146, 78479406664358},
+    },
+    {
+        name = '2026 • Shadow Ninja',
+        ids = {97134815283177, 70900202875823, 78479406664358},
+    },
 }
 
-local function applyMilashkaSet(set)
+local function skinApplyItemSet(set)
     if SkinApplyBusy then return end
     local character, humanoid = getSkinHumanoid()
     if not character or not humanoid then
@@ -5217,10 +5142,17 @@ local function applyMilashkaSet(set)
     end
     SkinApplyBusy = true
     local ok, err = pcall(function()
+        if SkinCurrentLabel then pcall(skinRestoreSnapshot) end
         skinSnapshotCharacter(character)
         skinDestroyLocalObjects()
-        for _, assetId in ipairs(set.items or {}) do
-            for _, root in ipairs(skinLoadObjects(assetId)) do
+        for _, obj in ipairs(character:GetChildren()) do
+            if obj:IsA('Accessory') or obj:IsA('Shirt') or obj:IsA('Pants') or obj:IsA('ShirtGraphic') then
+                pcall(function() obj:Destroy() end)
+            end
+        end
+        for _, assetId in ipairs(set.ids) do
+            local loaded = game:GetObjects('rbxassetid://' .. tostring(assetId))
+            for _, root in ipairs(loaded) do
                 local acc = root:IsA('Accessory') and root or root:FindFirstChildWhichIsA('Accessory', true)
                 if acc then
                     acc:SetAttribute('SakuraProjectLocalSkin', true)
@@ -5231,35 +5163,49 @@ local function applyMilashkaSet(set)
                     root:SetAttribute('SakuraProjectLocalSkin', true)
                     root.Parent = character
                     skinTrack(root)
-                elseif root then
-                    root:Destroy()
+                else
+                    pcall(function() root:Destroy() end)
                 end
             end
         end
         SkinCurrentLabel = set.name
     end)
     SkinApplyBusy = false
-    if ok then
-        Window:Notify({Title='Skin Changer', Description=set.name .. ' applied locally.', Duration=3})
-    else
-        Window:Notify({Title='Skin Changer', Description='Could not apply set: ' .. tostring(err), Duration=4})
-    end
+    Window:Notify({Title='Skin Changer', Description=ok and (set.name .. ' applied locally.') or ('Set failed: ' .. tostring(err)), Duration=4})
 end
 
-for _, set in ipairs(MilashkaSets) do
+for _, set in ipairs(SakuraSkinSets) do
     local preset = set
     Window:AddButton({
         Title = preset.name,
-        Description = 'Local visual preset from the supplied 2026 item list',
+        Description = 'New catalog set • LOCAL ONLY',
         Tab = SkinChangerTab,
-        Callback = function() applyMilashkaSet(preset) end,
+        Callback = function() skinApplyItemSet(preset) end,
+    })
+end
+
+Window:AddSection({Name = 'Full Costume / Outfit IDs', Tab = SkinChangerTab})
+local CostumeOutfits = {
+    -- Roblox-created / public bundle outfit IDs. These are resolved through
+    -- GetHumanoidDescriptionFromOutfitIdAsync and rendered locally.
+    {799, 'Fishman Costume'},
+    {239, 'Classic Woman Costume'},
+    {238, 'Classic Man Costume'},
+}
+for _, preset in ipairs(CostumeOutfits) do
+    local id, name = preset[1], preset[2]
+    Window:AddButton({
+        Title = name,
+        Description = 'Full costume • local visual renderer • ID ' .. tostring(id),
+        Tab = SkinChangerTab,
+        Callback = function() applyOutfitId(id, name) end,
     })
 end
 
 Window:AddSection({Name = 'Skin Controls', Tab = SkinChangerTab})
 Window:AddButton({
     Title = 'Restore Original Avatar',
-    Description = 'Restore the appearance captured before the first skin',
+    Description = 'Restore the original character body after a local skin',
     Tab = SkinChangerTab,
     Callback = function()
         local ok = skinRestoreSnapshot()
@@ -5579,6 +5525,72 @@ Window:AddButton({
                 Duration = 2,
             })
         end
+    end,
+})
+
+-- ===== LOCAL INVENTORY TEST / GHOST ITEM =====
+-- This intentionally does NOT fire a server inventory RemoteEvent and does not
+-- create a tradeable/server-owned item. It is only a client-side inventory test.
+Window:AddSection({Name = 'Local Inventory Test', Tab = SpawnerTab})
+local selectedGhostItem = nil
+Window:AddDropdown({
+    Title = 'Select Ghost Item',
+    Description = 'Client-only inventory test; not tradeable and not server-owned',
+    Tab = SpawnerTab,
+    Options = itemOptions,
+    Callback = function(value) selectedGhostItem = value end,
+})
+
+local function addGhostItem(name)
+    if not name then return false end
+    local ok = pcall(function()
+        local profile = require(game:GetService('ReplicatedStorage').Modules.ProfileData)
+        local weapons = profile.Weapons
+        local original = name
+        for _, item in ipairs(spawnerItems) do
+            if item.custom == name then original = item.original break end
+        end
+        weapons.Owned = weapons.Owned or {}
+        weapons.Owned[original] = math.max(tonumber(weapons.Owned[original]) or 0, 1)
+        profile.Weapons = weapons
+        local remotes = game:GetService('ReplicatedStorage'):FindFirstChild('Remotes')
+        local inventory = remotes and remotes:FindFirstChild('Inventory')
+        local changed = inventory and inventory:FindFirstChild('InventoryDataChanged')
+        if changed then pcall(function() changed:Fire() end) end
+    end)
+    return ok
+end
+
+Window:AddButton({
+    Title = 'Add Ghost Item (Local)',
+    Description = 'Adds selected item to this client UI only; no server RemoteEvent',
+    Tab = SpawnerTab,
+    Callback = function()
+        if not selectedGhostItem then
+            Window:Notify({Title='Ghost Item', Description='Select an item first.', Duration=3})
+            return
+        end
+        local ok=addGhostItem(selectedGhostItem)
+        Window:Notify({Title='Ghost Item', Description=ok and (selectedGhostItem..' added locally.') or 'Local inventory test failed.', Duration=3})
+    end,
+})
+Window:AddButton({
+    Title = 'Clear Local Ghost Item',
+    Description = 'Removes the selected ghost item from this client profile table',
+    Tab = SpawnerTab,
+    Callback = function()
+        if not selectedGhostItem then return end
+        pcall(function()
+            local profile = require(game:GetService('ReplicatedStorage').Modules.ProfileData)
+            local original=selectedGhostItem
+            for _, item in ipairs(spawnerItems) do if item.custom==selectedGhostItem then original=item.original break end end
+            if profile.Weapons and profile.Weapons.Owned then profile.Weapons.Owned[original]=nil end
+            local remotes=game:GetService('ReplicatedStorage'):FindFirstChild('Remotes')
+            local inventory=remotes and remotes:FindFirstChild('Inventory')
+            local changed=inventory and inventory:FindFirstChild('InventoryDataChanged')
+            if changed then pcall(function() changed:Fire() end) end
+        end)
+        Window:Notify({Title='Ghost Item', Description=selectedGhostItem..' cleared locally.', Duration=3})
     end,
 })
 
@@ -7151,341 +7163,303 @@ UserInputService.InputBegan:Connect(function(g)
 end)
 
 
--- ===== SAKURA PROJECT: NATIVE CLICKGUI BUTTON DRAG =====
--- IMPORTANT: this does NOT create a second launcher and does NOT replace the
--- original callback. It finds the existing library button (the knife button),
--- styles that same GuiButton and adds drag support to it.
+-- ===== SAKURA PROJECT: NATIVE CLICKGUI BUTTON =====
+-- Finds the library's real launcher, moves it into a full-screen overlay so it
+-- can be dragged anywhere, and leaves its original Activated/MouseButton1Click
+-- callback intact. No second launcher is created.
 task.spawn(function()
-    local Players = game:GetService('Players')
+    local PlayersSvc = game:GetService('Players')
     local UIS = game:GetService('UserInputService')
-    local CoreGui = game:GetService('CoreGui')
-    local player = Players.LocalPlayer
-    local playerGui = player:WaitForChild('PlayerGui')
+    local CoreGuiSvc = game:GetService('CoreGui')
+    local playerGui = PlayersSvc.LocalPlayer:WaitForChild('PlayerGui')
 
     local function roots()
-        local out = {playerGui, CoreGui}
-        pcall(function()
-            if gethui then table.insert(out, gethui()) end
-        end)
+        local out = {playerGui, CoreGuiSvc}
+        pcall(function() if gethui then table.insert(out, gethui()) end end)
         return out
     end
 
-    local function candidateScore(obj)
-        if not obj:IsA('ImageButton') and not obj:IsA('TextButton') then return -math.huge end
-        if not obj.Visible or not obj.Active then return -math.huge end
-        if obj:IsDescendantOf(script) then return -math.huge end
-
-        local size = obj.AbsoluteSize
-        local pos = obj.AbsolutePosition
-        if size.X < 45 or size.X > 150 or size.Y < 45 or size.Y > 150 then return -math.huge end
-        if math.abs(size.X - size.Y) > 35 then return -math.huge end
-
-        local camera = workspace.CurrentCamera
-        if not camera then return -math.huge end
-        local vp = camera.ViewportSize
-        local cx = pos.X + size.X / 2
-        local cy = pos.Y + size.Y / 2
-        local dx = math.abs(cx - vp.X / 2)
-        local dy = math.abs(cy - vp.Y * 0.25)
-
-        -- The library's launcher is the distinctive square button near the
-        -- upper-middle/center area in the user's screenshot.
+    local function scoreButton(obj)
+        if not (obj:IsA('ImageButton') or obj:IsA('TextButton')) then return -1e9 end
+        if not obj.Visible or not obj.Active then return -1e9 end
+        local s = obj.AbsoluteSize
+        local p0 = obj.AbsolutePosition
+        if s.X < 45 or s.X > 160 or s.Y < 45 or s.Y > 160 then return -1e9 end
+        if math.abs(s.X - s.Y) > 40 then return -1e9 end
+        local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
+        local cx, cy = p0.X + s.X/2, p0.Y + s.Y/2
         local score = 0
-        score += math.max(0, 320 - dx) * 2
-        score += math.max(0, 280 - dy)
-        score += math.max(0, 100 - math.abs(size.X - 85)) * 1.5
-
+        score = score + math.max(0, 360 - math.abs(cx - vp.X*0.32))
+        score = score + math.max(0, 260 - math.abs(cy - vp.Y*0.28))
+        score = score + math.max(0, 100 - math.abs(s.X - 84))
         local n = string.lower(obj.Name or '')
-        local p = obj.Parent and string.lower(obj.Parent.Name or '') or ''
-        for _, word in ipairs({'clickgui','click','toggle','menu','minimize','knife','open','hub'}) do
-            if string.find(n, word, 1, true) then score += 120 end
-            if string.find(p, word, 1, true) then score += 35 end
+        local parentName = obj.Parent and string.lower(obj.Parent.Name or '') or ''
+        for _, word in ipairs({'clickgui','click','toggle','menu','knife','open','hub','minimize'}) do
+            if n:find(word, 1, true) then score = score + 140 end
+            if parentName:find(word, 1, true) then score = score + 30 end
         end
-
-        if obj:IsA('ImageButton') and obj.Image and obj.Image ~= '' then score += 40 end
-        if obj:IsA('TextButton') and obj.Text and obj.Text ~= '' then score += 15 end
-
-        -- Avoid obvious Roblox top-bar controls.
-        if string.find(p, 'robloxgui', 1, true) then score -= 250 end
-        if string.find(n, 'chat', 1, true) or string.find(n, 'mic', 1, true) then score -= 200 end
-        if string.find(n, 'friend', 1, true) or string.find(n, 'playerlist', 1, true) then score -= 200 end
+        if obj:IsA('ImageButton') and obj.Image ~= '' then score = score + 80 end
+        if n:find('chat',1,true) or n:find('mic',1,true) or n:find('friend',1,true) then score = score - 500 end
         return score
     end
 
-    local function findNativeButton()
-        local best, bestScore = nil, -math.huge
+    local function findLauncher()
+        local best, bestScore
         for _, root in ipairs(roots()) do
             pcall(function()
                 for _, obj in ipairs(root:GetDescendants()) do
-                    local score = candidateScore(obj)
-                    if score > bestScore then
-                        bestScore, best = score, obj
-                    end
+                    local s = scoreButton(obj)
+                    if not bestScore or s > bestScore then best, bestScore = obj, s end
                 end
             end)
         end
-        return best, bestScore
+        if bestScore and bestScore > 100 then return best end
+        return nil
     end
 
-    local styled = nil
-    local function styleAndBind(button)
-        if not button or not button.Parent then return end
-        if styled == button then return end
-        styled = button
+    local overlay = nil
+    local bound = nil
+    local dragConnection = nil
+    local endConnection = nil
+    local beginConnection = nil
 
-        -- Preserve the original GUI callback. Only presentation is changed.
-        pcall(function()
-            button.AutoButtonColor = false
-            button.BackgroundTransparency = 0.08
-            button.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
-            button.ZIndex = math.max(button.ZIndex, 10000)
-        end)
+    local function ensureOverlay()
+        if overlay and overlay.Parent then return overlay end
+        overlay = Instance.new('ScreenGui')
+        overlay.Name = 'SakuraProjectNativeLauncherOverlay'
+        overlay.ResetOnSpawn = false
+        overlay.IgnoreGuiInset = true
+        overlay.ZIndexBehavior = Enum.ZIndexBehavior.Global
+        overlay.DisplayOrder = 100000
+        overlay.Parent = (gethui and gethui()) or CoreGuiSvc
+        return overlay
+    end
 
-        -- Keep its current size, but make it a clean circular launcher.
+    local function clamp(x, y, button)
+        local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
         local size = button.AbsoluteSize
-        if size.X >= 50 and size.Y >= 50 then
-            pcall(function()
-                button.Size = UDim2.fromOffset(math.clamp(math.max(size.X, size.Y), 64, 92), math.clamp(math.max(size.X, size.Y), 64, 92))
-            end)
-        end
+        return math.clamp(x, 2, math.max(2, vp.X-size.X-2)), math.clamp(y, 2, math.max(2, vp.Y-size.Y-2))
+    end
 
-        pcall(function()
-            button.ImageTransparency = 1
-        end)
+    local function bind(button)
+        if not button or not button.Parent or bound == button then return end
+        bound = button
+        local gui = ensureOverlay()
 
-        local corner = button:FindFirstChild('SakuraProjectNativeCorner')
-        if not corner then
-            corner = Instance.new('UICorner')
-            corner.Name = 'SakuraProjectNativeCorner'
-            corner.CornerRadius = UDim.new(1, 0)
-            corner.Parent = button
-        end
+        -- Detach from the library's constrained container. Existing click
+        -- connections survive reparenting, while our drag now has viewport-wide bounds.
+        local abs = button.AbsolutePosition
+        local size = button.AbsoluteSize
+        local x,y = clamp(abs.X, abs.Y, button)
+        button.Parent = gui
+        button.AnchorPoint = Vector2.new(0,0)
+        button.Position = UDim2.fromOffset(x,y)
+        button.Size = UDim2.fromOffset(math.clamp(math.max(size.X,size.Y), 68, 92), math.clamp(math.max(size.X,size.Y), 68, 92))
+        button.ZIndex = 100001
+        button.AutoButtonColor = false
+        button.BackgroundTransparency = 0.05
+        button.BackgroundColor3 = Color3.fromRGB(20,20,24)
 
-        local stroke = button:FindFirstChild('SakuraProjectNativeStroke')
-        if not stroke then
-            stroke = Instance.new('UIStroke')
-            stroke.Name = 'SakuraProjectNativeStroke'
-            stroke.Color = Color3.fromRGB(255, 105, 190)
-            stroke.Thickness = 2
-            stroke.Transparency = 0.15
-            stroke.Parent = button
-        end
+        local corner = button:FindFirstChild('SakuraProjectNativeCorner') or Instance.new('UICorner')
+        corner.Name = 'SakuraProjectNativeCorner'; corner.CornerRadius = UDim.new(1,0); corner.Parent = button
+        local stroke = button:FindFirstChild('SakuraProjectNativeStroke') or Instance.new('UIStroke')
+        stroke.Name = 'SakuraProjectNativeStroke'; stroke.Color = Color3.fromRGB(255,105,200); stroke.Thickness = 2; stroke.Parent = button
 
-        local label = button:FindFirstChild('SakuraProjectNativeLabel')
-        if not label then
-            label = Instance.new('TextLabel')
-            label.Name = 'SakuraProjectNativeLabel'
-            label.BackgroundTransparency = 1
-            label.Size = UDim2.fromScale(1, 1)
-            label.Position = UDim2.fromScale(0, 0)
-            label.Text = 'SA'
-            label.TextColor3 = Color3.fromRGB(255, 105, 190)
-            label.TextSize = 24
-            label.Font = Enum.Font.GothamBold
-            label.TextScaled = false
-            label.Active = false
-            label.Selectable = false
-            label.ZIndex = button.ZIndex + 1
-            label.Parent = button
-        end
+        local oldLabel = button:FindFirstChild('SakuraProjectNativeLabel')
+        if oldLabel then oldLabel:Destroy() end
+        pcall(function() button.ImageTransparency = 0 end)
 
-        -- Make the EXISTING launcher draggable. A normal tap is left to the
-        -- library's original MouseButton1Click/Activated handler.
-        local dragging = false
-        local moved = false
-        local dragStart
-        local startPos
-        local threshold = 8
-
-        local function savePosition()
+        local dragging, moved, startInput, startPos = false, false, nil, nil
+        local threshold = 7
+        local function save()
             local pos = button.AbsolutePosition
-            getgenv().SakuraProjectNativeButtonPosition = {X = pos.X, Y = pos.Y}
+            getgenv().SakuraProjectNativeButtonPosition = {X=pos.X,Y=pos.Y}
             pcall(function()
-                if writefile then
-                    writefile('SakuraProjectNativeButtonPosition.txt', string.format('%d|%d', pos.X, pos.Y))
-                end
+                if writefile then writefile('SakuraProjectNativeButtonPosition.txt', tostring(pos.X)..'|'..tostring(pos.Y)) end
             end)
         end
-
-        local function clampPosition(x, y)
-            local camera = workspace.CurrentCamera
-            if not camera then return x, y end
-            local vp = camera.ViewportSize
-            local w, h = button.AbsoluteSize.X, button.AbsoluteSize.Y
-            return math.clamp(x, 2, math.max(2, vp.X - w - 2)),
-                   math.clamp(y, 2, math.max(2, vp.Y - h - 2))
-        end
-
-        local function restorePosition()
-            local saved = getgenv().SakuraProjectNativeButtonPosition
-            if saved and tonumber(saved.X) and tonumber(saved.Y) then
-                local x, y = clampPosition(tonumber(saved.X), tonumber(saved.Y))
-                button.Position = UDim2.fromOffset(x, y)
-                return
+        pcall(function()
+            if isfile and isfile('SakuraProjectNativeButtonPosition.txt') and readfile then
+                local a,b = readfile('SakuraProjectNativeButtonPosition.txt'):match('^([%-%.%d]+)|([%-%.%d]+)$')
+                if a and b then
+                    local rx,ry=clamp(tonumber(a),tonumber(b),button)
+                    button.Position=UDim2.fromOffset(rx,ry)
+                end
+            elseif getgenv().SakuraProjectNativeButtonPosition then
+                local q=getgenv().SakuraProjectNativeButtonPosition
+                local rx,ry=clamp(tonumber(q.X),tonumber(q.Y),button)
+                button.Position=UDim2.fromOffset(rx,ry)
             end
-            pcall(function()
-                if isfile and isfile('SakuraProjectNativeButtonPosition.txt') and readfile then
-                    local a, b = readfile('SakuraProjectNativeButtonPosition.txt'):match('^([%-%.%d]+)|([%-%.%d]+)$')
-                    if a and b then
-                        local x, y = clampPosition(tonumber(a), tonumber(b))
-                        button.Position = UDim2.fromOffset(x, y)
-                    end
-                end
-            end)
-        end
+        end)
 
-        restorePosition()
+        if beginConnection then beginConnection:Disconnect() end
+        if dragConnection then dragConnection:Disconnect() end
+        if endConnection then endConnection:Disconnect() end
 
-        button.InputBegan:Connect(function(input)
+        beginConnection = button.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                dragging = true
-                moved = false
-                dragStart = input.Position
-                startPos = button.AbsolutePosition
+                dragging=true; moved=false; startInput=input.Position; startPos=button.AbsolutePosition
             end
         end)
-
-        UIS.InputChanged:Connect(function(input)
-            if not dragging or not dragStart or not startPos then return end
+        dragConnection = UIS.InputChanged:Connect(function(input)
+            if not dragging or not startInput or not startPos then return end
             if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
-            local delta = input.Position - dragStart
-            if delta.Magnitude >= threshold then moved = true end
+            local d=input.Position-startInput
+            if d.Magnitude >= threshold then moved=true end
             if moved then
-                local x, y = clampPosition(startPos.X + delta.X, startPos.Y + delta.Y)
-                button.Position = UDim2.fromOffset(x, y)
+                local nx,ny=clamp(startPos.X+d.X,startPos.Y+d.Y,button)
+                button.Position=UDim2.fromOffset(nx,ny)
             end
         end)
-
-        UIS.InputEnded:Connect(function(input)
+        endConnection = UIS.InputEnded:Connect(function(input)
             if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
-            if not dragging then return end
-            if moved then savePosition() end
-            dragging, moved, dragStart, startPos = false, false, nil, nil
+            if dragging and moved then save() end
+            dragging=false; moved=false; startInput=nil; startPos=nil
         end)
 
-        print('[Sakura Project] Native ClickGUI button bound:', button:GetFullName())
+        print('[Sakura Project] Bound native ClickGUI launcher:', button:GetFullName())
     end
 
-    -- The library can create the button after the main script starts, so keep
-    -- scanning briefly until the real button exists.
-    for _ = 1, 80 do
-        local button = findNativeButton()
-        if button then
-            styleAndBind(button)
-            break
-        end
-        task.wait(0.20)
+    for _=1,100 do
+        local b=findLauncher()
+        if b then bind(b); break end
+        task.wait(0.2)
     end
-
-    -- If the library recreates its launcher, bind the new instance as well.
     task.spawn(function()
         while task.wait(1) do
-            local button = findNativeButton()
-            if button and button ~= styled then
-                styleAndBind(button)
-            end
+            local b=findLauncher()
+            if b and b ~= bound then bind(b) end
         end
     end)
 end)
 
--- ===== SAKURA PROJECT: BIGGER GUI + BOLD TEXT + BIGGER CHECKBOXES =====
+-- ===== SAKURA PROJECT: UI POLISH / EASY CLOSE / WHITE HEADINGS =====
 task.spawn(function()
-    task.wait(1.5)
-    local Players = game:GetService('Players')
-    local CoreGui = game:GetService('CoreGui')
-    local playerGui = Players.LocalPlayer:WaitForChild('PlayerGui')
+    task.wait(1.4)
+    local PlayersSvc = game:GetService('Players')
+    local CoreGuiSvc = game:GetService('CoreGui')
+    local UIS = game:GetService('UserInputService')
+    local pg = PlayersSvc.LocalPlayer:WaitForChild('PlayerGui')
+    local pink = Color3.fromRGB(255,105,200)
+    local white = Color3.fromRGB(255,255,255)
+    local gray = Color3.fromRGB(205,205,210)
 
-    local function findWindow()
-        local best, bestScore = nil, -math.huge
-        for _, root in ipairs({playerGui, CoreGui}) do
-            for _, obj in ipairs(root:GetDescendants()) do
-                if (obj:IsA('TextLabel') or obj:IsA('TextButton')) and obj.Text == 'Sakura Project' then
-                    local cur = obj
-                    for _ = 1, 14 do
-                        cur = cur.Parent
-                        if not cur then break end
-                        if (cur:IsA('Frame') or cur:IsA('CanvasGroup')) and cur.AbsoluteSize.X >= 500 and cur.AbsoluteSize.Y >= 300 then
-                            local score = cur.AbsoluteSize.X * cur.AbsoluteSize.Y
-                            if score > bestScore then best, bestScore = cur, score end
-                            break
+    local function findMainWindow()
+        local best,bestArea=nil,0
+        for _,root in ipairs({pg,CoreGuiSvc}) do
+            pcall(function()
+                for _,obj in ipairs(root:GetDescendants()) do
+                    if (obj:IsA('Frame') or obj:IsA('CanvasGroup')) and obj.Visible then
+                        local s=obj.AbsoluteSize
+                        if s.X>=600 and s.Y>=350 then
+                            local area=s.X*s.Y
+                            if area>bestArea then best,bestArea=obj,area end
                         end
                     end
                 end
-            end
+            end)
         end
         return best
     end
 
-    local window = findWindow()
+    local window=findMainWindow()
     if not window then return end
-    window.Size = UDim2.fromOffset(1080, 740)
+    window.Size=UDim2.fromOffset(1120,760)
 
-    local constraint = window:FindFirstChild('SakuraProjectSizeConstraint')
-    if not constraint then
-        constraint = Instance.new('UISizeConstraint')
-        constraint.Name = 'SakuraProjectSizeConstraint'
-        constraint.MinSize = Vector2.new(900, 600)
-        constraint.MaxSize = Vector2.new(1450, 920)
-        constraint.Parent = window
-    end
+    local constraint=window:FindFirstChild('SakuraProjectSizeConstraint') or Instance.new('UISizeConstraint')
+    constraint.Name='SakuraProjectSizeConstraint'; constraint.MinSize=Vector2.new(760,520); constraint.MaxSize=Vector2.new(1800,1100); constraint.Parent=window
 
-    -- Real readable hierarchy: headings/functions bold, descriptions slightly smaller.
-    for _, obj in ipairs(window:GetDescendants()) do
-        if obj:IsA('TextLabel') or obj:IsA('TextButton') or obj:IsA('TextBox') then
-            pcall(function() obj.Font = Enum.Font.GothamBold end)
-            if obj.TextSize > 0 then
-                obj.TextSize = math.clamp(math.floor(obj.TextSize * 1.45 + 0.5), 16, 32)
-            end
+    -- White function headings and readable descriptions.
+    for _,obj in ipairs(window:GetDescendants()) do
+        if obj:IsA('TextButton') then
+            pcall(function() obj.Font=Enum.Font.GothamBold; obj.TextColor3=white; obj.TextSize=math.clamp(obj.TextSize,17,26) end)
+        elseif obj:IsA('TextLabel') or obj:IsA('TextBox') then
+            pcall(function()
+                obj.Font=Enum.Font.GothamBold
+                local t=string.lower(tostring(obj.Text or ''))
+                obj.TextColor3 = (t:find('description',1,true) and gray) or white
+                if obj.TextSize>0 then obj.TextSize=math.clamp(obj.TextSize,15,28) end
+            end)
         end
     end
 
-    -- Enlarge actual switch/button-like controls without touching decorative icons.
-    for _, obj in ipairs(window:GetDescendants()) do
-        if obj:IsA('ImageButton') or obj:IsA('ImageLabel') then
-            local s = obj.AbsoluteSize
-            if s.X >= 12 and s.X <= 55 and s.Y >= 12 and s.Y <= 55 and math.abs(s.X - s.Y) <= 10 then
-                pcall(function() obj.Size = UDim2.fromOffset(34, 34) end)
-            end
-        end
-    end
-
-    print('[Sakura Project] UI upgraded: 1080x740, GothamBold, 30px toggles')
-end)
-
--- ===== SAKURA PROJECT: UI POLISH =====
-task.spawn(function()
-    task.wait(1.2)
-    local PlayersSvc = game:GetService('Players')
-    local CoreGuiSvc = game:GetService('CoreGui')
-    local pg = PlayersSvc.LocalPlayer:WaitForChild('PlayerGui')
-    local pink = Color3.fromRGB(255, 105, 200)
-
-    local roots = {pg, CoreGuiSvc}
-    for _, root in ipairs(roots) do
-        for _, obj in ipairs(root:GetDescendants()) do
-            if obj:IsA('TextLabel') or obj:IsA('TextButton') then
-                local text = tostring(obj.Text or '')
-                local lower = string.lower(text)
-                if lower:find('heartagram', 1, true) or lower == 'heartagram hub' or lower == 'hub' then
-                    if lower:find('heartagram', 1, true) or lower == 'heartagram hub' then
-                        obj.Text = 'Sakura Project'
-                        pcall(function() obj.TextColor3 = pink end)
+    -- Keep the main title pink, everything else white.
+    for _,root in ipairs({pg,CoreGuiSvc}) do
+        pcall(function()
+            for _,obj in ipairs(root:GetDescendants()) do
+                if obj:IsA('TextLabel') or obj:IsA('TextButton') then
+                    local t=string.lower(tostring(obj.Text or ''))
+                    if t:find('heartagram',1,true) or t=='heartagram hub' then
+                        obj.Text='Sakura Project'; obj.TextColor3=pink; obj.Font=Enum.Font.GothamBold
+                    elseif t=='sakura project' then
+                        obj.TextColor3=pink; obj.Font=Enum.Font.GothamBold
                     end
                 end
-                local tabs = {
-                    ['combat']=true, ['localplayer']=true, ['autofarm']=true, ['visuals']=true,
-                    ['misc']=true, ['skin changer']=true, ['spawner']=true, ['settings']=true,
-                }
-                if tabs[lower] then
-                    pcall(function()
-                        obj.Font = Enum.Font.GothamBold
-                        obj.TextSize = 18
-                        if obj:IsA('TextButton') then obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, 42) end
-                    end)
-                end
+            end
+        end)
+    end
+
+    -- Make tabs taller and readable.
+    local tabs={combat=true,localplayer=true,autofarm=true,visuals=true,misc=true,['skin changer']=true,spawner=true,settings=true}
+    for _,obj in ipairs(window:GetDescendants()) do
+        if obj:IsA('TextButton') then
+            local t=string.lower(tostring(obj.Text or ''))
+            if tabs[t] then
+                pcall(function() obj.Size=UDim2.new(obj.Size.X.Scale,obj.Size.X.Offset,0,44); obj.TextSize=19; obj.TextColor3=white end)
             end
         end
     end
+
+    -- Add a large touch-friendly X. It only hides the window; the real launcher
+    -- remains responsible for reopening it, so no duplicate launcher is made.
+    local close=window:FindFirstChild('SakuraProjectCloseButton')
+    if not close then
+        close=Instance.new('TextButton')
+        close.Name='SakuraProjectCloseButton'
+        close.Size=UDim2.fromOffset(52,52)
+        close.AnchorPoint=Vector2.new(1,0)
+        close.Position=UDim2.new(1,-10,0,10)
+        close.BackgroundColor3=Color3.fromRGB(30,30,35)
+        close.BackgroundTransparency=0.08
+        close.Text='X'
+        close.TextColor3=white
+        close.TextSize=28
+        close.Font=Enum.Font.GothamBold
+        close.ZIndex=100000
+        close.AutoButtonColor=true
+        close.Parent=window
+        local c=Instance.new('UICorner'); c.CornerRadius=UDim.new(0,12); c.Parent=close
+        local s=Instance.new('UIStroke'); s.Color=pink; s.Thickness=2; s.Parent=close
+        close.Activated:Connect(function() window.Visible=false end)
+    end
+
+    -- Drag the whole menu from its top area and clamp against the actual viewport,
+    -- so it can be moved all the way to every edge instead of being trapped by a
+    -- small parent frame.
+    local dragging=false; local dragStart; local windowStart
+    local function clampWindow(x,y)
+        local vp=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
+        local s=window.AbsoluteSize
+        return math.clamp(x,0,math.max(0,vp.X-s.X)), math.clamp(y,0,math.max(0,vp.Y-s.Y))
+    end
+    window.InputBegan:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+            local ap=window.AbsolutePosition
+            if input.Position.Y-ap.Y <= 64 then dragging=true; dragStart=input.Position; windowStart=ap end
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType~=Enum.UserInputType.MouseMovement and input.UserInputType~=Enum.UserInputType.Touch then return end
+        local d=input.Position-dragStart
+        local x,y=clampWindow(windowStart.X+d.X,windowStart.Y+d.Y)
+        window.Position=UDim2.fromOffset(x,y)
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then dragging=false end
+    end)
+
+    print('[Sakura Project] UI fixed: white headings, easy close, full-screen drag, 1120x760')
 end)
 
 -- ===== SAKURA PROJECT: 10 LOCAL VISUAL FEATURES =====
@@ -7689,6 +7663,6 @@ end)
 task.wait(1)
 Window:Notify({
     Title = 'Sakura Project',
-    Description = 'Ready — Sakura Project UI polished, Farm Coin V2 and full skin presets loaded.',
+    Description = 'Ready — local skins, new sets, Farm Coin V2 and UI fixes loaded.',
     Duration = 5,
 })
