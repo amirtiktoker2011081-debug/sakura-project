@@ -838,6 +838,164 @@ UIElements.autoGrabGunToggle = Window:AddToggle({
         isagbEnabled = a
     end,
 })
+-- ===== SAKURA ANGEL: LOCAL SKIN CHANGER =====
+-- Только клиентский визуальный слой: создаёт локальные Clothing/Accessory объекты
+-- в персонаже и не вызывает RemoteEvent для смены внешности.
+SkinChangerTab = Window:AddTab({
+    Title = 'Skin Changer',
+    Icon = 'rbxassetid://11963373994',
+})
+
+Window:AddSection({
+    Name = 'Local Skins',
+    Tab = SkinChangerTab,
+})
+
+local SakuraLocalSkinApplied = false
+local SakuraLocalSkinFolderName = 'SakuraAngel_LocalSkin'
+
+local function getCharacterParts()
+    local character = p and p.Character
+    if not character or not character.Parent then
+        return nil, nil
+    end
+    local humanoid = character:FindFirstChildOfClass('Humanoid')
+    if not humanoid then
+        return nil, nil
+    end
+    return character, humanoid
+end
+
+local function removeLocalSkin(character)
+    local oldFolder = character and character:FindFirstChild(SakuraLocalSkinFolderName)
+    if oldFolder then
+        oldFolder:Destroy()
+    end
+    for _, obj in ipairs(character:GetChildren()) do
+        if obj:IsA('Shirt') and obj:GetAttribute('SakuraAngelLocalSkin') then
+            obj:Destroy()
+        elseif obj:IsA('Pants') and obj:GetAttribute('SakuraAngelLocalSkin') then
+            obj:Destroy()
+        elseif obj:IsA('Accessory') and obj:GetAttribute('SakuraAngelLocalSkin') then
+            obj:Destroy()
+        end
+    end
+end
+
+local function addLocalAccessory(character, assetId, folder)
+    local ok, objects = pcall(function()
+        return game:GetObjects('rbxassetid://' .. tostring(assetId))
+    end)
+    if not ok or type(objects) ~= 'table' then
+        return false
+    end
+
+    local added = false
+    for _, obj in ipairs(objects) do
+        if obj:IsA('Accessory') then
+            obj:SetAttribute('SakuraAngelLocalSkin', true)
+            obj.Parent = character
+            local humanoid = character:FindFirstChildOfClass('Humanoid')
+            if humanoid then
+                pcall(function()
+                    humanoid:AddAccessory(obj)
+                end)
+            end
+            added = true
+        else
+            obj:Destroy()
+        end
+    end
+    return added
+end
+
+local function applyPinkAngelLocalSkin()
+    local character = getCharacterParts()
+    if not character then
+        return false, 'Character/Humanoid not found'
+    end
+
+    removeLocalSkin(character)
+
+    local folder = Instance.new('Folder')
+    folder.Name = SakuraLocalSkinFolderName
+    folder.Parent = character
+
+    -- Classic pink angel clothing. These are local Shirt/Pants instances.
+    local shirt = Instance.new('Shirt')
+    shirt.Name = 'SakuraAngel_LocalShirt'
+    shirt.ShirtTemplate = 'rbxassetid://5529087338'
+    shirt:SetAttribute('SakuraAngelLocalSkin', true)
+    shirt.Parent = character
+
+    local pants = Instance.new('Pants')
+    pants.Name = 'SakuraAngel_LocalPants'
+    pants.PantsTemplate = 'rbxassetid://5529088945'
+    pants:SetAttribute('SakuraAngelLocalSkin', true)
+    pants.Parent = character
+
+    -- Popular pink angel wings. Failure here does not break the clothing.
+    addLocalAccessory(character, 8651335862, folder)
+
+    SakuraLocalSkinApplied = true
+    return true
+end
+
+local skinButton = Window:AddButton({
+    Title = 'Apply Pink Angel',
+    Description = 'Local visual skin — only on your client',
+    Tab = SkinChangerTab,
+    Callback = function()
+        local ok, err = applyPinkAngelLocalSkin()
+        if ok then
+            Window:Notify({
+                Title = 'Skin Changer',
+                Description = 'Pink Angel applied locally.',
+                Duration = 3,
+            })
+            -- После включения кнопка исчезает, как ты просил.
+            pcall(function()
+                if skinButton and skinButton.SetVisible then
+                    skinButton:SetVisible(false)
+                elseif skinButton and skinButton.Visible ~= nil then
+                    skinButton.Visible = false
+                end
+            end)
+        else
+            Window:Notify({
+                Title = 'Skin Changer',
+                Description = tostring(err or 'Failed to apply skin.'),
+                Duration = 3,
+            })
+        end
+    end,
+})
+
+Window:AddButton({
+    Title = 'Remove Local Skin',
+    Description = 'Restores the character by removing Sakura local items',
+    Tab = SkinChangerTab,
+    Callback = function()
+        local character = p and p.Character
+        if character then
+            removeLocalSkin(character)
+            SakuraLocalSkinApplied = false
+            pcall(function()
+                if skinButton and skinButton.SetVisible then
+                    skinButton:SetVisible(true)
+                elseif skinButton and skinButton.Visible ~= nil then
+                    skinButton.Visible = true
+                end
+            end)
+            Window:Notify({
+                Title = 'Skin Changer',
+                Description = 'Local skin removed.',
+                Duration = 2,
+            })
+        end
+    end,
+})
+
 LocalPlayerTab = Window:AddTab({
     Title = 'LocalPlayer',
     Icon = 'rbxassetid://11963373994',
